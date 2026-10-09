@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Siber Güvenlik Araçları – Hızlı Erişim</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f5f7fb;--card:#fff;--line:#dde3ee;--txt:#14203a;--mute:#5d6b86;--acc:#2563eb}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0a101c;--card:#111a2b;--line:#1f2d47;--txt:#dbe7ff;--mute:#8296b8;--acc:#5b9bff}}
+:root[data-theme="dark"]{--bg:#0a101c;--card:#111a2b;--line:#1f2d47;--txt:#dbe7ff;--mute:#8296b8;--acc:#5b9bff}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.w{max-width:1200px;margin:0 auto;padding:24px 16px}
+h1{margin:0 0 4px;font-size:26px}.sub{color:var(--mute);margin:0 0 18px;font-size:14px}
+#q{width:100%;padding:12px 14px;font-size:16px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--txt)}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 20px}
+.chip{border:1px solid var(--line);background:var(--card);color:var(--txt);padding:6px 12px;border-radius:99px;cursor:pointer;font-size:13px}
+.chip.on{background:var(--acc);border-color:var(--acc);color:#fff}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--mute);margin:22px 0 10px}
+.g{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.card{display:flex;flex-direction:column;gap:8px;padding:14px;background:var(--card);border:1px solid var(--line);border-radius:12px;text-decoration:none;color:var(--txt);transition:.15s}
+.card:hover{border-color:var(--acc);transform:translateY(-2px)}
+.card .top{display:flex;align-items:center;gap:8px}
+.card .ic{font-size:18px}
+.card b{font-size:15px}
+.card span.desc{font-size:12.5px;color:var(--mute);line-height:1.4}
+.tag{display:inline-block;font-size:10.5px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--mute);width:fit-content}
+.note{margin-top:28px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font-size:12.5px;color:var(--mute);background:var(--card)}
+#none{display:none;color:var(--mute);margin-top:20px}
+</style>
+</head>
+<body>
+<div class="w">
+<h1>🛡️ Siber Güvenlik Araçları</h1>
+<p class="sub">Savunma, analiz ve test için sık kullanılan araçlara hızlı erişim.</p>
+<input id="q" placeholder="Araç ara… (ör. nmap, zafiyet, şifre)" autocomplete="off">
+<div class="chips" id="chips"></div>
+<div id="list"></div>
+<p id="none">Sonuç bulunamadı.</p>
+<div class="note">⚠️ Tarama, sızma testi ve benzeri araçları yalnızca sahibi olduğun veya yazılı izinle test etme yetkin olan sistemlerde kullan. İzinsiz test yasal sorumluluk doğurur.</div>
+</div>
+<script>
+/*
+  DATA MODEL / VERİ YAPISI
+  -------------------------
+  D = { "Kategori Adı": [ [isim, açıklama, url, ikon(emoji), etiket], ... ], ... }
+  - Yeni araç eklemek için ilgili kategorinin dizisine bir satır eklemen yeterli.
+  - Yeni kategori eklemek için D nesnesine yeni bir "Kategori": [...] anahtarı eklemen yeterli,
+    kategori butonu (chip) otomatik oluşur.
+  - etiket alanı kartın sağ üstündeki küçük rozet (ör. "Web", "Ağ", "CLI"), istersen boş "" bırakabilirsin.
+*/
+const D={
+"Zafiyet Tarama":[
+ ["Nessus","Kapsamlı zafiyet tarama platformu","https://www.tenable.com/products/nessus","🧪","Tarayıcı"],
+ ["OpenVAS","Açık kaynak zafiyet tarayıcı","https://www.openvas.org","🧪","Açık Kaynak"],
+ ["Qualys","Bulut tabanlı güvenlik ve uyumluluk tarama","https://www.qualys.com","🧪","Bulut"],
+ ["Nikto","Web sunucusu zafiyet tarayıcı","https://cirt.net/Nikto2","🧪","Web"]
+],
+"Ağ & Port Analizi":[
+ ["Nmap","Ağ keşfi ve port tarama","https://nmap.org","📡","CLI"],
+ ["Wireshark","Paket analizi ve trafik inceleme","https://www.wireshark.org","📡","Masaüstü"],
+ ["Zenmap","Nmap için grafik arayüz","https://nmap.org/zenmap","📡","GUI"],
+ ["Netcat","Ağ bağlantısı okuma/yazma aracı","https://nmap.org/ncat","📡","CLI"]
+],
+"Web Uygulama Testi":[
+ ["Burp Suite","Web uygulama güvenlik test platformu","https://portswigger.net/burp","🕸️","Proxy"],
+ ["OWASP ZAP","Açık kaynak web güvenlik tarayıcısı","https://www.zaproxy.org","🕸️","Açık Kaynak"],
+ ["SQLmap","Otomatik SQL enjeksiyon tespiti","https://sqlmap.org","🕸️","CLI"],
+ ["Wappalyzer","Web teknolojisi tespiti","https://www.wappalyzer.com","🕸️","Tarayıcı Eklentisi"]
+],
+"Sızma Testi Platformları":[
+ ["Metasploit","Exploit geliştirme ve test çerçevesi","https://www.metasploit.com","🎯","Framework"],
+ ["Kali Linux","Sızma testi odaklı Linux dağıtımı","https://www.kali.org","🎯","İşletim Sistemi"],
+ ["Parrot Security OS","Güvenlik ve gizlilik odaklı dağıtım","https://www.parrotsec.org","🎯","İşletim Sistemi"],
+ ["TryHackMe","Pratik siber güvenlik eğitim ortamı","https://tryhackme.com","🎯","Eğitim"],
+ ["Hack The Box","Sızma testi pratik platformu","https://www.hackthebox.com","🎯","Eğitim"]
+],
+"Zararlı Yazılım Analizi":[
+ ["VirusTotal","Dosya ve URL çoklu motor taraması","https://www.virustotal.com","🦠","Online"],
+ ["Any.Run","İnteraktif sanal alan (sandbox) analizi","https://any.run","🦠","Sandbox"],
+ ["Hybrid Analysis","Otomatik zararlı yazılım analiz platformu","https://www.hybrid-analysis.com","🦠","Sandbox"],
+ ["Cuckoo Sandbox","Açık kaynak otomatik analiz sistemi","https://cuckoosandbox.org","🦠","Açık Kaynak"]
+],
+"Şifre & Kimlik Doğrulama":[
+ ["Hashcat","Yüksek performanslı şifre kırma aracı","https://hashcat.net/hashcat","🔑","CLI"],
+ ["John the Ripper","Şifre kırma ve denetim aracı","https://www.openwall.com/john","🔑","CLI"],
+ ["Have I Been Pwned","Hesap veri sızıntısı kontrolü","https://haveibeenpwned.com","🔑","Online"],
+ ["Bitwarden","Açık kaynak şifre yöneticisi","https://bitwarden.com","🔑","Yönetici"]
+],
+"Günlük & Olay İzleme (SIEM)":[
+ ["Splunk","Kurumsal log analizi ve SIEM","https://www.splunk.com","📊","SIEM"],
+ ["Elastic Security (ELK)","Açık kaynak log ve güvenlik analitiği","https://www.elastic.co/security","📊","Açık Kaynak"],
+ ["Wazuh","Açık kaynak tehdit tespiti ve uyumluluk","https://wazuh.com","📊","Açık Kaynak"],
+ ["Graylog","Log yönetimi platformu","https://graylog.org","📊","Log Yönetimi"]
+],
+"Tehdit İstihbaratı":[
+ ["MITRE ATT&CK","Saldırgan taktik ve teknik bilgi bankası","https://attack.mitre.org","🧠","Bilgi Bankası"],
+ ["AlienVault OTX","Açık tehdit istihbaratı paylaşım platformu","https://otx.alienvault.com","🧠","Topluluk"],
+ ["Shodan","İnternete bağlı cihaz arama motoru","https://www.shodan.io","🧠","Arama Motoru"],
+ ["AbuseIPDB","Kötüye kullanım bildirilen IP veritabanı","https://www.abuseipdb.com","🧠","Veritabanı"]
+],
+"Kriptografi & Kod Analizi":[
+ ["CyberChef","Veri şifreleme/çözme ve dönüştürme aracı seti","https://gchq.github.io/CyberChef","🧮","Online"],
+ ["Ghidra","NSA kaynaklı tersine mühendislik aracı","https://ghidra-sre.org","🧮","Tersine Müh."],
+ ["IDA Free","Disassembler ve tersine mühendislik aracı","https://hex-rays.com/ida-free","🧮","Tersine Müh."]
+],
+"Farkındalık & Kaynak":[
+ ["OWASP Top 10","En kritik web güvenlik riskleri listesi","https://owasp.org/www-project-top-ten","📚","Rehber"],
+ ["NIST Cybersecurity Framework","Kurumsal siber güvenlik çerçevesi","https://www.nist.gov/cyberframework","📚","Çerçeve"],
+ ["CVE Details","Bilinen zafiyetler veritabanı","https://www.cvedetails.com","📚","Veritabanı"]
+]
+};
+const L=document.getElementById("list"),C=document.getElementById("chips"),Q=document.getElementById("q"),N=document.getElementById("none");
+let cat="Tümü";
+["Tümü",...Object.keys(D)].forEach(k=>{
+ const b=document.createElement("button");
+ b.className="chip"+(k===cat?" on":"");
+ b.textContent=k;
+ b.onclick=()=>{cat=k;[...C.children].forEach(x=>x.classList.toggle("on",x===b));render()};
+ C.appendChild(b);
+});
+const esc=s=>s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function render(){
+ const q=Q.value.trim().toLowerCase();
+ let out="",n=0;
+ for(const[kategori,araclar]of Object.entries(D)){
+  if(cat!=="Tümü"&&cat!==kategori)continue;
+  const m=araclar.filter(t=>!q||(t[0]+t[1]+kategori).toLowerCase().includes(q));
+  if(!m.length)continue;
+  n+=m.length;
+  out+=`<h2>${esc(kategori)}</h2><div class="g">`+m.map(([isim,aciklama,url,ikon,etiket])=>`
+   <a class="card" href="${url}" target="_blank" rel="noopener noreferrer">
+     <div class="top"><span class="ic">${ikon||"🔧"}</span><b>${esc(isim)}</b></div>
+     <span class="desc">${esc(aciklama)}</span>
+     ${etiket?`<span class="tag">${esc(etiket)}</span>`:""}
+   </a>`).join("")+"</div>";
+ }
+ L.innerHTML=out;
+ N.style.display=n?"none":"block";
+}
+Q.oninput=render;
+render();
+</script>
+</body>
+</html>
