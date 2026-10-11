@@ -134,6 +134,7 @@ export default function Home() {
   const keyCacheRef = useRef<Record<string, CryptoKey>>({});
   const seenRef = useRef<Record<string, number>>({});
   const baseSetRef = useRef(false);
+  const lastSendRef = useRef({ t: "", at: 0 });
   const notifRef = useRef<NotificationPermission>("default");
   const mutedRef = useRef(false);
 
@@ -519,13 +520,19 @@ export default function Home() {
     const myName = meRef.current;
     const p = peerRef.current;
     const key = roomKeyRef.current;
-    if (!draft.trim() || !key || !myName || !p || sending) return;
+    const text = draft.trim();
+    if (!text || !key || !myName || !p || sending) return;
+    // aynı metin 2 sn içinde tekrar gönderilmek istenirse yoksay (çift Enter/çift tık)
+    const now = Date.now();
+    if (lastSendRef.current.t === text && now - lastSendRef.current.at < 2000) return;
+    lastSendRef.current = { t: text, at: now };
     try {
-      const { ivB64, ctB64 } = await encryptText(key, JSON.stringify(envelope("text", draft.trim())));
+      const { ivB64, ctB64 } = await encryptText(key, JSON.stringify(envelope("text", text)));
       await publish("text", ivB64, ctB64);
       setDraft("");
       setReply(null);
     } catch (e) {
+      lastSendRef.current = { t: "", at: 0 }; // başarısızsa kilidi aç, tekrar denensin
       setErr(e instanceof Error && e.message === "depo-dolu" ? "Tarayıcı deposu doldu." : "Gönderilemedi.");
     }
   }
@@ -868,7 +875,7 @@ export default function Home() {
                           e.target.value = "";
                         }} />
                       </label>
-                      <button onClick={send} disabled={sending} className="bg-emerald-600 rounded-lg px-3 sm:px-4 py-2 font-semibold disabled:opacity-50 shrink-0">
+                      <button onClick={(e) => { e.currentTarget.blur(); send(); }} disabled={sending} className="bg-emerald-600 rounded-lg px-3 sm:px-4 py-2 font-semibold disabled:opacity-50 shrink-0">
                         {sending ? "…" : <><span className="hidden sm:inline">Gönder</span><span className="sm:hidden">➤</span></>}
                       </button>
                       {showEmoji && (
