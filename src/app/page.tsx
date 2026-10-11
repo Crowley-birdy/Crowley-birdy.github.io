@@ -66,6 +66,7 @@ async function decodeRow(key: CryptoKey, m: ServerMsg): Promise<{ kind: string; 
 const USERS_KEY = "e2e_users_v1";
 const SERVER_KEY = "e2e_server_v1";
 const CONTACTS_KEY = "e2e_contacts_v1";
+const OUTBOX_KEY = "e2e_outbox_v1";
 
 type Contact = { name: string; pubJwk?: JsonWebKey; addedAt: number };
 
@@ -138,6 +139,7 @@ export default function Home() {
   const [unread, setUnread] = useState<Record<string, number>>({});
   const [notifPerm, setNotifPerm] = useState<NotificationPermission>("default");
   const [muted, setMuted] = useState(false);
+  const [connDown, setConnDown] = useState(false);
   const [theme, setTheme] = useState<ThemeId>("dark");
   const [custom, setCustom] = useState(DEFAULT_CUSTOM);
   const [showSettings, setShowSettings] = useState(false);
@@ -358,23 +360,32 @@ export default function Home() {
     if (!myName || !p || !key) return;
     let all: ServerMsg[] = loadServer();
     if (supabaseConfigured && supabase) {
-      const { data } = await supabase!
-        .from("messages")
-        .select("*")
-        .or(`and(sender.eq.${myName},receiver.eq.${p}),and(sender.eq.${p},receiver.eq.${myName})`)
-        .order("created_at", { ascending: true })
-        .limit(100);
-      if (data) {
-        all = data.map((m: { sender: string; receiver: string; iv: string; ct: string; created_at: string; kind?: string }) => ({
-          from: m.sender,
-          to: m.receiver,
-          iv: m.iv,
-          ct: m.ct,
-          kind: m.kind ?? "text",
-          ts: new Date(m.created_at).getTime(),
-        }));
+      try {
+        // EN YENİ 100 mesaj (tersten çekip sırala; yoksa yeni mesajlar ekrana gelmez!)
+        const { data, error } = await supabase!
+          .from("messages")
+          .select("*")
+          .or(`and(sender.eq.${myName},receiver.eq.${p}),and(sender.eq.${p},receiver.eq.${myName})`)
+          .order("created_at", { ascending: false })
+          .limit(100);
+        if (error) throw error;
+        markConn(true);
+        if (data) {
+          all = data.reverse().map((m: { sender: string; receiver: string; iv: string; ct: string; created_at: string; kind?: string }) => ({
+            from: m.sender,
+            to: m.receiver,
+            iv: m.iv,
+            ct: m.ct,
+            kind: m.kind ?? "text",
+            ts: new Date(m.created_at).getTime(),
+          }));
+        }
+      } catch {
+        markConn(false);
+        return; // eski mesajlar ekranda kalır, yenileme sonraki tura
       }
     } else {
+      markConn(true);
       all = all
         .filter((m) => (m.from === myName && m.to === p) || (m.from === p && m.to === myName))
         .map((m) => ({ ...m, kind: (m as ServerMsg).kind ?? "text" }));
@@ -437,6 +448,10 @@ export default function Home() {
       const myName = meRef.current;
       if (!myName || stop) return;
       try {
+        // kuyrukta bekleyen giden mesajları dene
+        try {
+          if (await flushOutbox()) await refresh();
+        } catch { /* sonraki tur */ }
         let incoming: { from: string; iv: string; ct: string; kind: string; ts: number }[] = [];
         if (supabaseConfigured && supabase) {
           const { data } = await supabase!
@@ -506,7 +521,50 @@ export default function Home() {
   }
 
   // Şifreli satırı yayınla: yerelde + Supabase'te (sunucu hep şifreli görür)
-  async function publish(kind: string, ivB64: string, ctB64: string) {
+  // Dönüş: true = sunucuya yazıldı, false = kuyruğa alındı (bağlantı yok)
+  function markConn(ok: boolean) {
+    setConnDown((prev) => {
+      const next = !ok;
+      return prev === next ? prev : next;
+    });
+  }
+
+  function stashOutbox(row: ServerMsg) {
+    try {
+      const box: ServerMsg[] = JSON.parse(localStorage.getItem(OUTBOX_KEY) ?? "[]");
+      box.push(row);
+      localStorage.setItem(OUTBOX_KEY, JSON.stringify(box.slice(-50))); // taşmayı önle
+    } catch { /* yoksay */ }
+  }
+
+  async function flushOutbox(): Promise<boolean> {
+    if (!supabaseConfigured || !supabase) return false;
+    let box: ServerMsg[] = [];
+    try {
+      box = JSON.parse(localStorage.getItem(OUTBOX_KEY) ?? "[]");
+    } catch {
+      return false;
+    }
+    if (!box.length) return false;
+    const rest: ServerMsg[] = [];
+    for (const r of box) {
+      try {
+        const { error } = await supabase!.from("messages").insert({
+          sender: r.from, receiver: r.to, iv: r.iv, ct: r.ct, kind: r.kind ?? "text",
+        });
+        if (error) rest.push(r);
+      } catch {
+        rest.push(r); // ağ hâlâ kopuk: kalanı sonraki tura
+        break;
+      }
+    }
+    try {
+      localStorage.setItem(OUTBOX_KEY, JSON.stringify(rest));
+    } catch { /* yoksay */ }
+    return rest.length < box.length;
+  }
+
+  async function publish(kind: string, ivB64: string, ctB64: string): Promise<boolean> {
     const myName = meRef.current!;
     const p = peerRef.current;
     const row: ServerMsg = { from: myName, to: p, iv: ivB64, ct: ctB64, ts: Date.now(), kind };
@@ -521,10 +579,21 @@ export default function Home() {
       new BroadcastChannel(SERVER_KEY).postMessage("new");
     } catch { /* yoksa polling yakalar */ }
     if (supabaseConfigured && supabase) {
-      const { error } = await supabase!.from("messages").insert({ sender: myName, receiver: p, iv: ivB64, ct: ctB64, kind });
-      if (error) throw new Error(error.message);
+      try {
+        const { error } = await supabase!.from("messages").insert({ sender: myName, receiver: p, iv: ivB64, ct: ctB64, kind });
+        if (error) throw error;
+        markConn(true);
+      } catch {
+        // bağlantı yok: kuyruğa al, bağlantı dönünce gidecek
+        stashOutbox({ from: myName, to: p, iv: ivB64, ct: ctB64, ts: Date.now(), kind });
+        markConn(false);
+        return false;
+      }
     }
-    await refresh();
+    try {
+      await refresh();
+    } catch { /* yenileme patlarsa iyimser mesaj ekranda kalır */ }
+    return true;
   }
 
   function envelope(kind: string, body: string, extra?: Partial<Envelope>): Envelope {
@@ -605,7 +674,8 @@ export default function Home() {
       setMsgs((prev) => [...prev, entry]);
       setDraft("");
       setReply(null);
-      await publish("text", ivB64, ctB64);
+      const ok = await publish("text", ivB64, ctB64);
+      if (!ok) setInfo("📡 Bağlantı yok — mesaj kuyruğa alındı, internet gelince gidecek.");
     } catch (e) {
       lastSendRef.current = { t: "", at: 0 }; // başarısızsa kilidi aç, tekrar denensin
       setErr(e instanceof Error && e.message === "depo-dolu" ? "Tarayıcı deposu doldu." : "Gönderilemedi.");
@@ -656,7 +726,8 @@ export default function Home() {
       setMsgs((prev) => [...prev, entry]);
       setReply(null);
       setInfo("");
-      await publish("image", ivB64, ctB64);
+      const okImg = await publish("image", ivB64, ctB64);
+      if (!okImg) setInfo("📡 Bağlantı yok — resim kuyruğa alındı, internet gelince gidecek.");
     } catch (e) {
       setErr(e instanceof Error && e.message === "depo-dolu" ? "Tarayıcı deposu doldu (demo modu limiti)." : e instanceof Error ? "Gönderilemedi: " + e.message : "Resim gönderilemedi.");
       setInfo("");
@@ -701,7 +772,8 @@ export default function Home() {
       setMsgs((prev) => [...prev, entry]);
       setReply(null);
       setInfo("");
-      await publish("video", e2.ivB64, e2.ctB64);
+      const okVid = await publish("video", e2.ivB64, e2.ctB64);
+      if (!okVid) setInfo("📡 Bağlantı yok — video kuyruğa alındı, internet gelince gidecek.");
     } catch (e) {
       URL.revokeObjectURL(previewUrl);
       setErr(e instanceof Error ? "Gönderilemedi: " + e.message : "Video gönderilemedi.");
@@ -870,6 +942,7 @@ export default function Home() {
 
             {err && <p className="text-red-400 text-sm mt-2">{err}</p>}
             {info && <p className="text-[var(--accent-hi)] text-sm mt-2">{info}</p>}
+            {connDown && <p className="text-xs text-amber-400 mt-2">📡 Bağlantı kopuk — yeniden deneniyor, gönderdiklerin kuyrukta bekliyor.</p>}
 
             <div className="grid md:grid-cols-[260px_1fr] gap-4 mt-3 flex-1 min-h-0">
               {/* KİŞİLER */}
