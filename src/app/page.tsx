@@ -25,6 +25,24 @@ type Envelope = { v: 1; kind: string; body: string; biv?: string; reply?: ReplyR
 
 const EMOJIS = ["😀","😁","😂","🤣","😊","😍","😘","😎","🤔","😐","🙄","😴","😷","🤒","😢","😭","😡","🤯","🥳","😇","🙏","👍","👎","👏","🙌","🤝","✌️","🤞","👀","🧠","❤️","💔","💯","🔥","🎉","⭐","🌙","☀️","🌈","⚡","🎬","📷","🎵","⚽","🚀","🍕","☕","🌹","🐱","🐶"];
 
+type ThemeId = "dark" | "gruvbox" | "dracula" | "nord" | "light" | "custom";
+const THEMES: { id: ThemeId; name: string; dots: [string, string, string] }[] = [
+  { id: "dark", name: "Gece", dots: ["#09090b", "#27272a", "#059669"] },
+  { id: "gruvbox", name: "Gruvbox", dots: ["#282828", "#504945", "#b8bb26"] },
+  { id: "dracula", name: "Dracula", dots: ["#282a36", "#44475a", "#50fa7b"] },
+  { id: "nord", name: "Nord", dots: ["#2e3440", "#434c5e", "#88c0d0"] },
+  { id: "light", name: "Açık", dots: ["#f1f1f4", "#ffffff", "#059669"] },
+  { id: "custom", name: "Özel", dots: ["#888888", "#aaaaaa", "#cc6633"] },
+];
+const DEFAULT_CUSTOM = { bg: "#1c1917", panel: "#292524", accent: "#d6a35c", ink: "#f5f0e8" };
+
+function hexLum(hex: string): number {
+  const h = hex.replace("#", "");
+  const v = (i: number) => parseInt(h.slice(i, i + 2), 16) / 255;
+  const [r, g, b] = [v(0), v(2), v(4)];
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
 async function decodeRow(key: CryptoKey, m: ServerMsg): Promise<{ kind: string; body: string; reply?: ReplyRef; biv?: string }> {
   if (m.kind === "video") {
     const p = JSON.parse(await decryptText(key, m.iv, m.ct)) as Envelope;
@@ -120,6 +138,9 @@ export default function Home() {
   const [unread, setUnread] = useState<Record<string, number>>({});
   const [notifPerm, setNotifPerm] = useState<NotificationPermission>("default");
   const [muted, setMuted] = useState(false);
+  const [theme, setTheme] = useState<ThemeId>("dark");
+  const [custom, setCustom] = useState(DEFAULT_CUSTOM);
+  const [showSettings, setShowSettings] = useState(false);
 
   // sekmeler arası senkron için ref'ler (storage event stale closure yemesin)
   const meRef = useRef<string | null>(null);
@@ -151,6 +172,38 @@ export default function Home() {
   useEffect(() => {
     mutedRef.current = muted;
   }, [muted]);
+
+  // Tema: açılışta yükle + değişince uygula ve sakla
+  useEffect(() => {
+    try {
+      const t = localStorage.getItem("e2e_theme") as ThemeId | null;
+      if (t && THEMES.some((x) => x.id === t)) setTheme(t);
+      const c = localStorage.getItem("e2e_custom");
+      if (c) setCustom({ ...DEFAULT_CUSTOM, ...JSON.parse(c) });
+    } catch { /* varsayılan tema */ }
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = theme;
+    for (const p of ["--bg", "--panel", "--accent", "--ink", "--accent-ink", "--out", "--out-ink"]) {
+      root.style.removeProperty(p);
+    }
+    if (theme === "custom") {
+      root.style.setProperty("--bg", custom.bg);
+      root.style.setProperty("--panel", custom.panel);
+      root.style.setProperty("--accent", custom.accent);
+      root.style.setProperty("--ink", custom.ink);
+      const ink = hexLum(custom.accent) > 0.45 ? "#1a1a1a" : "#ffffff";
+      root.style.setProperty("--accent-ink", ink);
+      root.style.setProperty("--out", custom.accent);
+      root.style.setProperty("--out-ink", ink);
+    }
+    try {
+      localStorage.setItem("e2e_theme", theme);
+      localStorage.setItem("e2e_custom", JSON.stringify(custom));
+    } catch { /* gizli mod */ }
+  }, [theme, custom]);
 
   useEffect(() => {
     (async () => {
@@ -667,43 +720,78 @@ export default function Home() {
 
   if (booting) {
     return (
-      <main className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
-        <p className="text-sm text-zinc-400">🔒 Oturum açılıyor...</p>
+      <main className="min-h-screen bg-[var(--bg)] text-[var(--ink)] flex items-center justify-center">
+        <p className="text-sm text-[var(--muted)]">🔒 Oturum açılıyor...</p>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-100 p-4 sm:p-6">
+    <main className="min-h-screen bg-[var(--bg)] text-[var(--ink)] p-4 sm:p-6">
       <div className="max-w-5xl mx-auto space-y-4 flex flex-col min-h-[calc(100vh-2rem)] sm:min-h-[calc(100vh-3rem)]">
         <header className="flex items-center justify-between">
-          <h1 className="text-xl font-bold">🔒 E2E Chat <span className="text-xs font-normal text-zinc-400">uçtan uca şifreli</span></h1>
-          <div className="text-xs text-zinc-400">
-            {supabaseConfigured ? "● Supabase bağlı" : "○ Demo modu (yerel sunucu simülasyonu)"}
+          <h1 className="text-xl font-bold">🔒 E2E Chat <span className="text-xs font-normal text-[var(--muted)]">uçtan uca şifreli</span></h1>
+          <div className="flex items-center gap-2">
+            <div className="text-xs text-[var(--muted)] hidden sm:block">
+              {supabaseConfigured ? "● Supabase bağlı" : "○ Demo modu (yerel sunucu simülasyonu)"}
+            </div>
+            <div className="relative">
+              <button onClick={() => setShowSettings((v) => !v)} title="Tema" className="bg-[var(--input)] hover:bg-[var(--btn-hi)] rounded-lg px-2 py-1">🎨</button>
+              {showSettings && (
+                <div className="absolute right-0 top-9 z-20 bg-[var(--panel)] border border-[var(--border)] rounded-xl p-3 w-60 space-y-2 shadow-xl">
+                  <p className="text-xs text-[var(--muted)] font-semibold">Tema</p>
+                  <div className="grid grid-cols-2 gap-1">
+                    {THEMES.map((t) => (
+                      <button key={t.id} onClick={() => setTheme(t.id)}
+                        className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${theme === t.id ? "bg-[var(--out)] text-[var(--out-ink)]" : "bg-[var(--input)]"}`}>
+                        <span className="flex -space-x-1">
+                          {t.dots.map((d) => (
+                            <span key={d} className="w-3 h-3 rounded-full border border-black/30" style={{ background: d }} />
+                          ))}
+                        </span>
+                        {t.name}
+                      </button>
+                    ))}
+                  </div>
+                  {theme === "custom" && (
+                    <div className="space-y-1 pt-1">
+                      {([["bg", "Arka plan"], ["panel", "Kart"], ["accent", "Vurgu"], ["ink", "Yazı"]] as const).map(([k, label]) => (
+                        <label key={k} className="flex items-center justify-between text-xs text-[var(--muted)]">
+                          {label}
+                          <input type="color" value={custom[k]} onChange={(e) => setCustom((c) => ({ ...c, [k]: e.target.value }))}
+                            className="w-10 h-7 rounded cursor-pointer bg-transparent" />
+                        </label>
+                      ))}
+                      <p className="text-[11px] text-[var(--faint)]">Diğer tonlar otomatik türetilir.</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
         {tab === "auth" || !me ? (
-          <section className="bg-zinc-900 rounded-2xl p-5 space-y-3 border border-zinc-800 max-w-md w-full mx-auto">
+          <section className="bg-[var(--panel)] rounded-2xl p-5 space-y-3 border border-[var(--border)] max-w-md w-full mx-auto">
             <h2 className="font-semibold">Rumuz + şifre ile giriş</h2>
-            <p className="text-sm text-zinc-400">
+            <p className="text-sm text-[var(--muted)]">
               Şifren sunucuya hiç gitmez. Özel anahtarın şifrenle şifrelenip saklanır. Sunucu sadece açık anahtar ve şifreli mesaj görür.
             </p>
             <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="rumuz (örn. ayse)"
-              className="w-full bg-zinc-800 rounded-lg px-3 py-2 outline-none" />
+              className="w-full bg-[var(--input)] rounded-lg px-3 py-2 outline-none" />
             <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="şifre"
-              className="w-full bg-zinc-800 rounded-lg px-3 py-2 outline-none" />
+              className="w-full bg-[var(--input)] rounded-lg px-3 py-2 outline-none" />
             <div className="flex gap-2">
-              <button onClick={register} className="flex-1 bg-zinc-700 hover:bg-zinc-600 rounded-lg py-2">Kayıt ol</button>
-              <button onClick={login} className="flex-1 bg-emerald-600 hover:bg-emerald-500 rounded-lg py-2 font-semibold">Giriş</button>
+              <button onClick={register} className="flex-1 bg-[var(--btn)] hover:bg-[var(--btn-hi)] rounded-lg py-2">Kayıt ol</button>
+              <button onClick={login} className="flex-1 bg-[var(--accent)] hover:bg-[var(--accent-hi)] text-[var(--accent-ink)] rounded-lg py-2 font-semibold">Giriş</button>
             </div>
-            <label className="text-sm flex items-center gap-2 cursor-pointer text-zinc-300">
+            <label className="text-sm flex items-center gap-2 cursor-pointer text-[var(--ink)]">
               <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
               Oturumu açık tut (bu cihazda şifre sorma)
             </label>
             {err && <p className="text-red-400 text-sm">{err}</p>}
-            {info && <p className="text-emerald-400 text-sm">{info}</p>}
-            <details className="text-xs text-zinc-400">
+            {info && <p className="text-[var(--accent-hi)] text-sm">{info}</p>}
+            <details className="text-xs text-[var(--muted)]">
               <summary className="cursor-pointer">İki kişiyi aynı tarayıcıda nasıl denersin?</summary>
               <p className="mt-1">1. ayse olarak kayıt ol → giriş → açık anahtarını kopyala → çıkış. 2. mehmet olarak kayıt ol → giriş → kişi: ayse + ayse&apos;nin anahtarını yapıştır → bağlan. Mesaj gönder. Sonra ayse ile giriş yapıp tersini yap.</p>
             </details>
@@ -714,40 +802,40 @@ export default function Home() {
               <p>Merhaba <b>{me}</b> 👋</p>
               <div className="flex items-center gap-2">
                 {notifPerm !== "granted" ? (
-                  <button onClick={enableNotif} title="Bildirimleri aç" className="text-xs bg-zinc-800 hover:bg-zinc-700 rounded-lg px-2 py-1">🔔 Bildirimleri aç</button>
+                  <button onClick={enableNotif} title="Bildirimleri aç" className="text-xs bg-[var(--input)] hover:bg-[var(--btn-hi)] rounded-lg px-2 py-1">🔔 Bildirimleri aç</button>
                 ) : (
-                  <span title="Bildirimler açık" className="text-xs text-emerald-400">🔔 Açık</span>
+                  <span title="Bildirimler açık" className="text-xs text-[var(--accent-hi)]">🔔 Açık</span>
                 )}
-                <button onClick={() => setMuted((v) => !v)} title={muted ? "Sesi aç" : "Sessize al"} className="text-xs bg-zinc-800 hover:bg-zinc-700 rounded-lg px-2 py-1">
+                <button onClick={() => setMuted((v) => !v)} title={muted ? "Sesi aç" : "Sessize al"} className="text-xs bg-[var(--input)] hover:bg-[var(--btn-hi)] rounded-lg px-2 py-1">
                   {muted ? "🔇" : "🔊"}
                 </button>
-                <button onClick={logout} className="text-xs text-zinc-400 underline">çıkış</button>
+                <button onClick={logout} className="text-xs text-[var(--muted)] underline">çıkış</button>
               </div>
             </div>
 
             {/* mobil sekmeler */}
             <div className="grid grid-cols-2 gap-2 mt-3 md:hidden">
               <button onClick={() => setMobileTab("people")}
-                className={`rounded-lg py-2 font-semibold ${mobileTab === "people" ? "bg-emerald-700" : "bg-zinc-800"}`}>
+                className={`rounded-lg py-2 font-semibold ${mobileTab === "people" ? "bg-[var(--out)] text-[var(--out-ink)]" : "bg-[var(--input)]"}`}>
                 👥 Kişiler{unreadTotal > 0 ? ` (${unreadTotal})` : ""}
               </button>
               <button onClick={() => setMobileTab("chat")}
-                className={`rounded-lg py-2 font-semibold ${mobileTab === "chat" ? "bg-emerald-700" : "bg-zinc-800"}`}>💬 Sohbet</button>
+                className={`rounded-lg py-2 font-semibold ${mobileTab === "chat" ? "bg-[var(--out)] text-[var(--out-ink)]" : "bg-[var(--input)]"}`}>💬 Sohbet</button>
             </div>
 
             {err && <p className="text-red-400 text-sm mt-2">{err}</p>}
-            {info && <p className="text-emerald-400 text-sm mt-2">{info}</p>}
+            {info && <p className="text-[var(--accent-hi)] text-sm mt-2">{info}</p>}
 
             <div className="grid md:grid-cols-[260px_1fr] gap-4 mt-3 flex-1 min-h-0">
               {/* KİŞİLER */}
-              <aside className={`${mobileTab === "people" ? "block" : "hidden"} md:block bg-zinc-900 rounded-2xl p-4 space-y-3 border border-zinc-800 h-fit md:sticky md:top-4`}>
-                <h2 className="font-semibold text-sm text-zinc-300">👥 Kişiler</h2>
+              <aside className={`${mobileTab === "people" ? "block" : "hidden"} md:block bg-[var(--panel)] rounded-2xl p-4 space-y-3 border border-[var(--border)] h-fit md:sticky md:top-4`}>
+                <h2 className="font-semibold text-sm text-[var(--ink)]">👥 Kişiler</h2>
                 {contacts.length === 0 && (
-                  <p className="text-xs text-zinc-500">Henüz kişi yok. Aşağıdan ilk kişini ekle 👇</p>
+                  <p className="text-xs text-[var(--faint)]">Henüz kişi yok. Aşağıdan ilk kişini ekle 👇</p>
                 )}
                 <div className="space-y-1">
                   {contacts.map((c) => (
-                    <div key={c.name} className={`flex items-center gap-1 rounded-lg pr-1 ${peer === c.name && roomKey ? "bg-emerald-700" : "bg-zinc-800"}`}>
+                    <div key={c.name} className={`flex items-center gap-1 rounded-lg pr-1 ${peer === c.name && roomKey ? "bg-[var(--out)] text-[var(--out-ink)]" : "bg-[var(--input)]"}`}>
                       <button onClick={() => connectPeer(c.name)} className="flex-1 text-left px-3 py-2 font-medium truncate">💬 {c.name}</button>
                       {(unread[c.name] ?? 0) > 0 && (
                         <span className="bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 flex items-center justify-center px-1">{unread[c.name]}</span>
@@ -755,50 +843,50 @@ export default function Home() {
                       <button
                         title={`${c.name} kişisini sil`}
                         onClick={() => me && setContacts(removeContact(me, c.name))}
-                        className="text-zinc-500 hover:text-red-400 rounded px-1"
+                        className="text-[var(--faint)] hover:text-red-400 rounded px-1"
                       >×</button>
                     </div>
                   ))}
                 </div>
                 <details className="text-sm">
-                  <summary className="cursor-pointer text-emerald-300 font-medium">＋ Yeni kişi</summary>
+                  <summary className="cursor-pointer text-[var(--accent-hi)] font-medium">＋ Yeni kişi</summary>
                   <div className="space-y-2 mt-2">
                     <div className="flex gap-2">
                       <input value={peer} onChange={(e) => setPeer(e.target.value)} placeholder="rumuz (örn. mehmet)"
-                        className="flex-1 min-w-0 bg-zinc-800 rounded-lg px-3 py-2 outline-none text-sm" />
-                      <button onClick={() => connectPeer()} className="bg-emerald-600 rounded-lg px-3 py-2 font-semibold text-sm shrink-0">Bağlan</button>
+                        className="flex-1 min-w-0 bg-[var(--input)] rounded-lg px-3 py-2 outline-none text-sm" />
+                      <button onClick={() => connectPeer()} className="bg-[var(--accent)] text-[var(--accent-ink)] rounded-lg px-3 py-2 font-semibold text-sm shrink-0">Bağlan</button>
                     </div>
                     <textarea value={peerJwkText} onChange={(e) => setPeerJwkText(e.target.value)}
                       placeholder="Açık anahtar (Supabase bağlı değilse gerekli)"
-                      className="w-full bg-zinc-800 rounded-lg px-3 py-2 outline-none text-xs h-14" />
+                      className="w-full bg-[var(--input)] rounded-lg px-3 py-2 outline-none text-xs h-14" />
                   </div>
                 </details>
-                <details className="text-xs text-zinc-400">
+                <details className="text-xs text-[var(--muted)]">
                   <summary className="cursor-pointer">Benim açık anahtarım</summary>
-                  <pre className="text-[11px] bg-zinc-800 rounded-lg p-2 overflow-auto max-h-24 mt-1">{JSON.stringify(myPubJwk)}</pre>
+                  <pre className="text-[11px] bg-[var(--input)] rounded-lg p-2 overflow-auto max-h-24 mt-1">{JSON.stringify(myPubJwk)}</pre>
                   <button onClick={() => myPubJwk && navigator.clipboard.writeText(JSON.stringify(myPubJwk))}
-                    className="mt-1 text-xs bg-zinc-700 rounded px-2 py-1">kopyala</button>
+                    className="mt-1 text-xs bg-[var(--btn)] rounded px-2 py-1">kopyala</button>
                 </details>
               </aside>
 
               {/* SOHBET */}
-              <section className={`${mobileTab === "chat" ? "flex" : "hidden"} md:flex flex-col bg-zinc-900 rounded-2xl p-4 sm:p-5 space-y-3 border border-emerald-900 min-h-[60vh] md:min-h-[65vh]`}>
+              <section className={`${mobileTab === "chat" ? "flex" : "hidden"} md:flex flex-col bg-[var(--panel)] rounded-2xl p-4 sm:p-5 space-y-3 border border-[var(--accent-dim)] min-h-[60vh] md:min-h-[65vh]`}>
                 <div className="flex items-center justify-between">
-                  <h3 className="font-semibold text-emerald-300">
+                  <h3 className="font-semibold text-[var(--accent-hi)]">
                     {roomKey ? `💬 ${peer} ile güvenli sohbet` : "💬 Sohbet"}
                   </h3>
-                  {roomKey && <button onClick={() => refresh()} title="Yenile" className="bg-zinc-700 rounded-lg px-2 py-1 text-sm">↻</button>}
+                  {roomKey && <button onClick={() => refresh()} title="Yenile" className="bg-[var(--btn)] rounded-lg px-2 py-1 text-sm">↻</button>}
                 </div>
                 {!roomKey ? (
-                  <p className="text-sm text-zinc-500 flex-1 flex items-center justify-center text-center">
+                  <p className="text-sm text-[var(--faint)] flex-1 flex items-center justify-center text-center">
                     Başlamak için kişilerinden birini seç<br />veya yeni kişi ekle 👈
                   </p>
                 ) : (
                   <>
                     <div className="space-y-2 flex-1 overflow-auto min-h-[40vh]">
-                      {msgs.length === 0 && <p className="text-sm text-zinc-500">Henüz mesaj yok. İlk şifreli mesajı gönder!</p>}
+                      {msgs.length === 0 && <p className="text-sm text-[var(--faint)]">Henüz mesaj yok. İlk şifreli mesajı gönder!</p>}
                       {msgs.map((m, i) => (
-                        <div key={i} className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${m.mine ? "ml-auto bg-emerald-700" : "bg-zinc-700"}`}>
+                        <div key={i} className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${m.mine ? "ml-auto bg-[var(--out)] text-[var(--out-ink)]" : "bg-[var(--btn)]"}`}>
                           {m.reply && (
                             <div className="text-xs opacity-80 border-l-2 border-white/40 pl-2 mb-1">
                               <span className="font-semibold">{m.reply.from}:</span> {m.reply.snippet}
@@ -824,20 +912,20 @@ export default function Home() {
                       ))}
                     </div>
                     {reply && (
-                      <div className="flex items-center gap-2 text-xs bg-zinc-800 rounded-lg px-3 py-2">
+                      <div className="flex items-center gap-2 text-xs bg-[var(--input)] rounded-lg px-3 py-2">
                         <span className="flex-1 truncate"><b>{reply.from}:</b> {reply.snippet}</span>
-                        <button onClick={() => setReply(null)} className="text-zinc-400 hover:text-white">✕</button>
+                        <button onClick={() => setReply(null)} className="text-[var(--muted)] hover:text-[var(--ink)]">✕</button>
                       </div>
                     )}
                     <div className="flex gap-2 relative">
                       <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()}
-                        placeholder="şifreli mesaj yaz..." className="flex-1 min-w-0 bg-zinc-800 rounded-lg px-3 py-2 outline-none" />
+                        placeholder="şifreli mesaj yaz..." className="flex-1 min-w-0 bg-[var(--input)] rounded-lg px-3 py-2 outline-none" />
                       <div className="sm:hidden">
-                        <button onClick={() => setShowAttach((v) => !v)} title="Ekle" className="bg-zinc-700 rounded-lg px-3 py-2">＋</button>
+                        <button onClick={() => setShowAttach((v) => !v)} title="Ekle" className="bg-[var(--btn)] rounded-lg px-3 py-2">＋</button>
                         {showAttach && (
-                          <div className="absolute bottom-12 right-0 bg-zinc-800 border border-zinc-700 rounded-xl p-2 flex gap-1 z-10">
-                            <button title="Emoji" onClick={() => { setShowEmoji((v) => !v); setShowAttach(false); }} className="text-xl hover:bg-zinc-700 rounded p-1">😊</button>
-                            <label title="Şifreli resim" className="text-xl hover:bg-zinc-700 rounded p-1 cursor-pointer">📷
+                          <div className="absolute bottom-12 right-0 bg-[var(--input)] border border-[var(--border)] rounded-xl p-2 flex gap-1 z-10">
+                            <button title="Emoji" onClick={() => { setShowEmoji((v) => !v); setShowAttach(false); }} className="text-xl hover:bg-[var(--btn-hi)] rounded p-1">😊</button>
+                            <label title="Şifreli resim" className="text-xl hover:bg-[var(--btn-hi)] rounded p-1 cursor-pointer">📷
                               <input type="file" accept="image/*" className="hidden" onChange={(e) => {
                                 const f = e.target.files?.[0];
                                 if (f) sendImage(f);
@@ -845,7 +933,7 @@ export default function Home() {
                                 setShowAttach(false);
                               }} />
                             </label>
-                            <label title="Şifreli video (max 25MB)" className="text-xl hover:bg-zinc-700 rounded p-1 cursor-pointer">🎬
+                            <label title="Şifreli video (max 25MB)" className="text-xl hover:bg-[var(--btn-hi)] rounded p-1 cursor-pointer">🎬
                               <input type="file" accept="video/*" className="hidden" onChange={(e) => {
                                 const f = e.target.files?.[0];
                                 if (f) sendVideo(f);
@@ -856,8 +944,8 @@ export default function Home() {
                           </div>
                         )}
                       </div>
-                      <button onClick={() => setShowEmoji((v) => !v)} title="Emoji" className="hidden sm:block bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2">😊</button>
-                      <label className="hidden sm:block bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2 cursor-pointer" title="Şifreli resim gönder">
+                      <button onClick={() => setShowEmoji((v) => !v)} title="Emoji" className="hidden sm:block bg-[var(--btn)] hover:bg-[var(--btn-hi)] rounded-lg px-3 py-2">😊</button>
+                      <label className="hidden sm:block bg-[var(--btn)] hover:bg-[var(--btn-hi)] rounded-lg px-3 py-2 cursor-pointer" title="Şifreli resim gönder">
                         📷
                         <input type="file" accept="image/*" className="hidden" onChange={(e) => {
                           const f = e.target.files?.[0];
@@ -865,7 +953,7 @@ export default function Home() {
                           e.target.value = "";
                         }} />
                       </label>
-                      <label className="hidden sm:block bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2 cursor-pointer" title="Şifreli video gönder (max 25MB)">
+                      <label className="hidden sm:block bg-[var(--btn)] hover:bg-[var(--btn-hi)] rounded-lg px-3 py-2 cursor-pointer" title="Şifreli video gönder (max 25MB)">
                         🎬
                         <input type="file" accept="video/*" className="hidden" onChange={(e) => {
                           const f = e.target.files?.[0];
@@ -873,13 +961,13 @@ export default function Home() {
                           e.target.value = "";
                         }} />
                       </label>
-                      <button onClick={(e) => { e.currentTarget.blur(); send(); }} disabled={sending} className="bg-emerald-600 rounded-lg px-3 sm:px-4 py-2 font-semibold disabled:opacity-50 shrink-0">
+                      <button onClick={(e) => { e.currentTarget.blur(); send(); }} disabled={sending} className="bg-[var(--accent)] text-[var(--accent-ink)] rounded-lg px-3 sm:px-4 py-2 font-semibold disabled:opacity-50 shrink-0">
                         {sending ? "…" : <><span className="hidden sm:inline">Gönder</span><span className="sm:hidden">➤</span></>}
                       </button>
                       {showEmoji && (
-                        <div className="absolute bottom-12 right-0 bg-zinc-800 border border-zinc-700 rounded-xl p-2 grid grid-cols-8 gap-1 max-w-[280px] z-10">
+                        <div className="absolute bottom-12 right-0 bg-[var(--input)] border border-[var(--border)] rounded-xl p-2 grid grid-cols-8 gap-1 max-w-[280px] z-10">
                           {EMOJIS.map((e) => (
-                            <button key={e} onClick={() => setDraft((d) => d + e)} className="text-xl hover:bg-zinc-700 rounded p-0.5">{e}</button>
+                            <button key={e} onClick={() => setDraft((d) => d + e)} className="text-xl hover:bg-[var(--btn-hi)] rounded p-0.5">{e}</button>
                           ))}
                         </div>
                       )}
@@ -891,7 +979,7 @@ export default function Home() {
           </div>
         )}
 
-        <footer className="text-xs text-zinc-500 leading-relaxed">
+        <footer className="text-xs text-[var(--faint)] leading-relaxed">
           Nasıl çalışıyor? Kayıtta ECDH P-256 kimlik anahtarı üretilir, özel anahtar şifrenle (PBKDF2 150k + AES-GCM) kilitlenir.
           Sohbette ECDH ile ortak oda anahtarı türetilir, her mesaj AES-GCM ile şifrelenir. Sunucu (yerel simülasyon veya Supabase) sadece iv + şifreli metin görür.
           Ücretsiz yayın: bu repo Vercel&apos;e + Supabase ücretsiz katmanına bağlanır. <code>supabase/schema.sql</code>&apos;i çalıştır, <code>.env.example</code>&apos;deki 2 anahtarı Vercel&apos;e ekle.

@@ -1,26 +1,112 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* Tema motoru: arayüz [data-theme] + karşılığı değişkenleri okur.
+   Yeni tema = aşağıya 1 blok ekle, arayüze dokunmaya gerek yok. */
+
+:root,
+[data-theme="dark"] {
+  --bg: #09090b;
+  --panel: #18181b;
+  --input: #27272a;
+  --btn: #3f3f46;
+  --btn-hi: #52525b;
+  --ink: #f4f4f5;
+  --muted: #a1a1aa;
+  --faint: #71717a;
+  --accent: #059669;
+  --accent-hi: #10b981;
+  --accent-ink: #ffffff;
+  --out: #047857;
+  --out-ink: #f4f4f5;
+  --accent-dim: #064e3b;
+  --border: #27272a;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+[data-theme="gruvbox"] {
+  --bg: #282828;
+  --panel: #3c3836;
+  --input: #504945;
+  --btn: #665c54;
+  --btn-hi: #7c6f64;
+  --ink: #ebdbb2;
+  --muted: #bdae93;
+  --faint: #928374;
+  --accent: #98971a;
+  --accent-hi: #b8bb26;
+  --accent-ink: #282828;
+  --out: #79740e;
+  --out-ink: #ebdbb2;
+  --accent-dim: #79740e;
+  --border: #504945;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+[data-theme="dracula"] {
+  --bg: #282a36;
+  --panel: #343746;
+  --input: #44475a;
+  --btn: #44475a;
+  --btn-hi: #6272a4;
+  --ink: #f8f8f2;
+  --muted: #9aa0c3;
+  --faint: #6272a4;
+  --accent: #50fa7b;
+  --accent-hi: #8affa9;
+  --accent-ink: #282a36;
+  --out: #2f7a3e;
+  --out-ink: #f8f8f2;
+  --accent-dim: #2f7a3e;
+  --border: #44475a;
+}
+
+[data-theme="nord"] {
+  --bg: #2e3440;
+  --panel: #3b4252;
+  --input: #434c5e;
+  --btn: #4c566a;
+  --btn-hi: #5e6a82;
+  --ink: #eceff4;
+  --muted: #88c0d0;
+  --faint: #67748e;
+  --accent: #88c0d0;
+  --accent-hi: #a5d8e5;
+  --accent-ink: #2e3440;
+  --out: #5e81ac;
+  --out-ink: #eceff4;
+  --accent-dim: #4c6885;
+  --border: #434c5e;
+}
+
+[data-theme="light"] {
+  --bg: #f1f1f4;
+  --panel: #ffffff;
+  --input: #e4e4e7;
+  --btn: #d4d4d8;
+  --btn-hi: #bdbdc5;
+  --ink: #18181b;
+  --muted: #52525b;
+  --faint: #a1a1aa;
+  --accent: #059669;
+  --accent-hi: #10b981;
+  --accent-ink: #ffffff;
+  --out: #059669;
+  --out-ink: #ffffff;
+  --accent-dim: #a7f3d0;
+  --border: #d4d4d8;
+}
+
+/* Özel tema: kullanıcı 4 renk seçer, gerisi otomatik türetilir */
+[data-theme="custom"] {
+  --input: color-mix(in srgb, var(--panel) 82%, white);
+  --btn: color-mix(in srgb, var(--panel) 66%, white);
+  --btn-hi: color-mix(in srgb, var(--panel) 52%, white);
+  --muted: color-mix(in srgb, var(--ink) 62%, var(--bg));
+  --faint: color-mix(in srgb, var(--ink) 42%, var(--bg));
+  --accent-hi: color-mix(in srgb, var(--accent) 78%, white);
+  --accent-dim: color-mix(in srgb, var(--accent) 45%, var(--bg));
+  --border: color-mix(in srgb, var(--panel) 68%, white);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
 }
