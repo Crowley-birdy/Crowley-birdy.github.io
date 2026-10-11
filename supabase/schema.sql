@@ -16,6 +16,7 @@ create table if not exists messages (
   receiver text not null references profiles(username) on delete cascade,
   iv text not null,
   ct text not null,
+  kind text not null default 'text',
   created_at timestamptz default now()
 );
 
@@ -33,3 +34,5 @@ drop policy if exists "mesaj yazma" on messages;
 create policy "mesaj yazma" on messages for insert with check (true);
 
 -- Realtime: Database > Replication > messages tablosunu aç
+-- veya SQL ile:
+-- alter publication supabase_realtime add table messages;

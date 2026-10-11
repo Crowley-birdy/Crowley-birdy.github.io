@@ -8,11 +8,14 @@ import {
   deriveRoomKey,
   encryptText,
   decryptText,
+  encryptBytes,
+  decryptBytes,
+  bufToB64,
 } from "@/lib/crypto";
 import { supabase, supabaseConfigured } from "@/lib/supabase";
 
 type UserRec = { pubJwk: JsonWebKey; encryptedPrivB64: string; saltB64: string; ivB64: string };
-type ServerMsg = { from: string; to: string; iv: string; ct: string; ts: number };
+type ServerMsg = { from: string; to: string; iv: string; ct: string; ts: number; kind: string };
 type ChatMsg = ServerMsg & { plain: string; mine: boolean };
 
 const USERS_KEY = "e2e_users_v1";
@@ -177,22 +180,30 @@ export default function Home() {
         .order("created_at", { ascending: true })
         .limit(100);
       if (data) {
-        all = data.map((m: { sender: string; receiver: string; iv: string; ct: string; created_at: string }) => ({
+        all = data.map((m: { sender: string; receiver: string; iv: string; ct: string; created_at: string; kind?: string }) => ({
           from: m.sender,
           to: m.receiver,
           iv: m.iv,
           ct: m.ct,
+          kind: m.kind ?? "text",
           ts: new Date(m.created_at).getTime(),
         }));
       }
     } else {
-      all = all.filter((m) => (m.from === myName && m.to === p) || (m.from === p && m.to === myName));
+      all = all
+        .filter((m) => (m.from === myName && m.to === p) || (m.from === p && m.to === myName))
+        .map((m) => ({ ...m, kind: (m as ServerMsg).kind ?? "text" }));
     }
     const out: ChatMsg[] = [];
     for (const m of all) {
       try {
-        const plain = await decryptText(key, m.iv, m.ct);
-        out.push({ ...m, plain, mine: m.from === myName });
+        if (m.kind === "image") {
+          const bytes = await decryptBytes(key, m.iv, m.ct);
+          out.push({ ...m, plain: "data:image/jpeg;base64," + bufToB64(bytes), mine: m.from === myName });
+        } else {
+          const plain = await decryptText(key, m.iv, m.ct);
+          out.push({ ...m, plain, mine: m.from === myName });
+        }
       } catch {
         out.push({ ...m, plain: "(çözülemedi)", mine: m.from === myName });
       }
@@ -211,7 +222,7 @@ export default function Home() {
     const key = roomKeyRef.current;
     if (!draft.trim() || !key || !myName || !p) return;
     const { ivB64, ctB64 } = await encryptText(key, draft.trim());
-    const row: ServerMsg = { from: myName, to: p, iv: ivB64, ct: ctB64, ts: Date.now() };
+    const row: ServerMsg = { from: myName, to: p, iv: ivB64, ct: ctB64, ts: Date.now(), kind: "text" };
     const all = loadServer();
     all.push(row);
     localStorage.setItem(SERVER_KEY, JSON.stringify(all));
@@ -219,10 +230,63 @@ export default function Home() {
       new BroadcastChannel(SERVER_KEY).postMessage("new");
     } catch { /* yoksa polling yakalar */ }
     if (supabaseConfigured && supabase) {
-      await supabase!.from("messages").insert({ sender: myName, receiver: p, iv: ivB64, ct: ctB64 });
+      await supabase!.from("messages").insert({ sender: myName, receiver: p, iv: ivB64, ct: ctB64, kind: "text" });
     }
     setDraft("");
     await refresh();
+  }
+
+  // Resmi küçültüp JPEG'e çevir (şifreli yükü küçük tutar, max ~1024px)
+  async function compressImage(file: File): Promise<Uint8Array> {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 1024 / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * scale));
+    const h = Math.max(1, Math.round(bmp.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(bmp, 0, 0, w, h);
+    bmp.close();
+    const blob: Blob | null = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.72));
+    if (!blob) throw new Error("resim işlenemedi");
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+
+  async function sendImage(file: File) {
+    setErr("");
+    setInfo("");
+    const myName = meRef.current;
+    const p = peerRef.current;
+    const key = roomKeyRef.current;
+    if (!key || !myName || !p) return;
+    if (!file.type.startsWith("image/")) return setErr("Sadece resim dosyası gönderebilirsin.");
+    try {
+      setInfo("Resim şifreleniyor...");
+      const bytes = await compressImage(file);
+      if (bytes.length > 900 * 1024) return setErr("Resim hâlâ çok büyük, daha küçük bir resim dene.");
+      const { ivB64, ctB64 } = await encryptBytes(key, bytes);
+      const row: ServerMsg = { from: myName, to: p, iv: ivB64, ct: ctB64, ts: Date.now(), kind: "image" };
+      const all = loadServer();
+      all.push(row);
+      try {
+        localStorage.setItem(SERVER_KEY, JSON.stringify(all));
+      } catch {
+        return setErr("Tarayıcı deposu doldu (demo modu limiti). Supabase bağlıyken bu sorun olmaz.");
+      }
+      try {
+        new BroadcastChannel(SERVER_KEY).postMessage("new");
+      } catch { /* yoksa polling yakalar */ }
+      if (supabaseConfigured && supabase) {
+        const { error } = await supabase!.from("messages").insert({ sender: myName, receiver: p, iv: ivB64, ct: ctB64, kind: "image" });
+        if (error) return setErr("Gönderilemedi: " + error.message);
+      }
+      setInfo("");
+      await refresh();
+    } catch {
+      setErr("Resim gönderilemedi.");
+      setInfo("");
+    }
   }
 
   // Supabase realtime: yeni mesaj gelirse çözüp göster
@@ -334,7 +398,12 @@ export default function Home() {
                   {msgs.length === 0 && <p className="text-sm text-zinc-500">Henüz mesaj yok. İlk şifreli mesajı gönder!</p>}
                   {msgs.map((m, i) => (
                     <div key={i} className={`max-w-[80%] rounded-xl px-3 py-2 text-sm ${m.mine ? "ml-auto bg-emerald-700" : "bg-zinc-700"}`}>
-                      <p>{m.plain}</p>
+                      {m.kind === "image" ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={m.plain} alt="şifreli resim" className="rounded-lg max-w-full" />
+                      ) : (
+                        <p>{m.plain}</p>
+                      )}
                       <p className="text-[10px] opacity-60 mt-1">{m.from} • {new Date(m.ts).toLocaleTimeString()}</p>
                     </div>
                   ))}
@@ -342,6 +411,14 @@ export default function Home() {
                 <div className="flex gap-2">
                   <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()}
                     placeholder="şifreli mesaj yaz..." className="flex-1 bg-zinc-800 rounded-lg px-3 py-2 outline-none" />
+                  <label className="bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2 cursor-pointer" title="Şifreli resim gönder">
+                    📷
+                    <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) sendImage(f);
+                      e.target.value = "";
+                    }} />
+                  </label>
                   <button onClick={send} className="bg-emerald-600 rounded-lg px-4 py-2 font-semibold">Gönder</button>
                 </div>
 
@@ -352,7 +429,7 @@ export default function Home() {
                   </label>
                   {showServer && (
                     <pre className="text-[11px] bg-black rounded-lg p-2 mt-2 overflow-auto max-h-40 text-zinc-400">
-                      {JSON.stringify(serverMsgs.filter((m) => (m.from === me && m.to === peer) || (m.from === peer && m.to === me)), null, 1)}
+                      {JSON.stringify(serverMsgs.filter((m) => (m.from === me && m.to === peer) || (m.from === peer && m.to === me)), (k, v) => typeof v === "string" && v.length > 120 ? v.slice(0, 120) + `…(${v.length} karakter)` : v, 1)}
                     </pre>
                   )}
                 </div>

@@ -102,3 +102,19 @@ export async function decryptText(roomKey: CryptoKey, ivB64: string, ctB64: stri
   );
   return new TextDecoder().decode(plain);
 }
+
+// Resim/dosya için binary şifreleme (aynı oda anahtarı, AES-GCM)
+export async function encryptBytes(roomKey: CryptoKey, data: Uint8Array) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv as BufferSource }, roomKey, data as BufferSource);
+  return { ivB64: bufToB64(iv), ctB64: bufToB64(ct) };
+}
+
+export async function decryptBytes(roomKey: CryptoKey, ivB64: string, ctB64: string): Promise<Uint8Array> {
+  const plain = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: b64ToBuf(ivB64) as BufferSource },
+    roomKey,
+    b64ToBuf(ctB64) as BufferSource
+  );
+  return new Uint8Array(plain);
+}
