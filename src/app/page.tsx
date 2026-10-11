@@ -13,6 +13,7 @@ import {
   bufToB64,
 } from "@/lib/crypto";
 import { supabase, supabaseConfigured } from "@/lib/supabase";
+import { saveSession, loadSession, clearSession, toUnextractable } from "@/lib/session";
 
 type UserRec = { pubJwk: JsonWebKey; encryptedPrivB64: string; saltB64: string; ivB64: string };
 type ServerMsg = { from: string; to: string; iv: string; ct: string; ts: number; kind: string };
@@ -51,6 +52,8 @@ export default function Home() {
   const [err, setErr] = useState("");
   const [info, setInfo] = useState("");
   const [showServer, setShowServer] = useState(true);
+  const [remember, setRemember] = useState(true);
+  const [booting, setBooting] = useState(true);
 
   // sekmeler arası senkron için ref'ler (storage event stale closure yemesin)
   const meRef = useRef<string | null>(null);
@@ -63,12 +66,26 @@ export default function Home() {
   const serverMsgs = useMemo(() => loadServer(), [msgs, me]); // eslint-disable-line
 
   useEffect(() => {
-    const s = localStorage.getItem("e2e_session");
-    if (s) {
-      // oturum sadece isim tutar, anahtar şifreyle açılır -> tekrar giriş ister
-      setUsername(s);
+    (async () => {
+      try {
+        const s = await loadSession();
+        if (s) {
+          setMe(s.username);
+          setMyPriv(s.privateKey);
+          setMyPubJwk(s.pubJwk);
+          setUsername(s.username);
+          setTab("chat");
+          setBooting(false);
+          return;
+        }
+      } catch { /* düşerse normal girişe in */ }
+      try {
+        const name = localStorage.getItem("e2e_session");
+        if (name) setUsername(name);
+      } catch { /* yoksay */ }
       setTab("auth");
-    }
+      setBooting(false);
+    })();
   }, []);
 
   async function register() {
@@ -118,11 +135,22 @@ export default function Home() {
     }
     if (!rec) return setErr("Kullanıcı bulunamadı. Önce kayıt ol.");
     try {
-      const { privateKey } = await unlockPrivateKey(rec.encryptedPrivB64, rec.saltB64, rec.ivB64, password);
+      const { privJwk, privateKey } = await unlockPrivateKey(rec.encryptedPrivB64, rec.saltB64, rec.ivB64, password);
       setMe(u);
       setMyPriv(privateKey);
       setMyPubJwk(rec.pubJwk);
-      localStorage.setItem("e2e_session", u);
+      try {
+        localStorage.setItem("e2e_session", u);
+      } catch { /* yoksay */ }
+      if (remember) {
+        try {
+          // şifre bir daha sorulmasın: anahtarı dışa aktarılamaz modda kasaya koy
+          await saveSession({ username: u, pubJwk: rec.pubJwk, privateKey: await toUnextractable(privJwk) });
+        } catch { /* kasa yazılamazsa normal devam */ }
+      } else {
+        await clearSession();
+      }
+      setPassword("");
       setTab("chat");
     } catch {
       setErr("Şifre yanlış (özel anahtar açılamadı).");
@@ -324,14 +352,22 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me, peer, roomKey]);
 
-  function logout() {
+  async function logout() {
     setMe(null);
     setMyPriv(null);
     setRoomKey(null);
     setMsgs([]);
     setPeer("");
-    localStorage.removeItem("e2e_session");
+    await clearSession();
     setTab("auth");
+  }
+
+  if (booting) {
+    return (
+      <main className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
+        <p className="text-sm text-zinc-400">🔒 Oturum açılıyor...</p>
+      </main>
+    );
   }
 
   return (
@@ -358,6 +394,10 @@ export default function Home() {
               <button onClick={register} className="flex-1 bg-zinc-700 hover:bg-zinc-600 rounded-lg py-2">Kayıt ol</button>
               <button onClick={login} className="flex-1 bg-emerald-600 hover:bg-emerald-500 rounded-lg py-2 font-semibold">Giriş</button>
             </div>
+            <label className="text-sm flex items-center gap-2 cursor-pointer text-zinc-300">
+              <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+              Oturumu açık tut (bu cihazda şifre sorma)
+            </label>
             {err && <p className="text-red-400 text-sm">{err}</p>}
             {info && <p className="text-emerald-400 text-sm">{info}</p>}
             <details className="text-xs text-zinc-400">
