@@ -21,6 +21,38 @@ type ChatMsg = ServerMsg & { plain: string; mine: boolean };
 
 const USERS_KEY = "e2e_users_v1";
 const SERVER_KEY = "e2e_server_v1";
+const CONTACTS_KEY = "e2e_contacts_v1";
+
+type Contact = { name: string; pubJwk?: JsonWebKey; addedAt: number };
+
+function loadContacts(me: string): Contact[] {
+  try {
+    const all = JSON.parse(localStorage.getItem(CONTACTS_KEY) ?? "{}");
+    return all[me] ?? [];
+  } catch {
+    return [];
+  }
+}
+function saveContact(me: string, c: Contact) {
+  try {
+    const all = JSON.parse(localStorage.getItem(CONTACTS_KEY) ?? "{}");
+    const list: Contact[] = all[me] ?? [];
+    const i = list.findIndex((x) => x.name === c.name);
+    if (i >= 0) list[i] = { ...list[i], ...c };
+    else list.push(c);
+    all[me] = list;
+    localStorage.setItem(CONTACTS_KEY, JSON.stringify(all));
+  } catch { /* yoksay */ }
+  return loadContacts(me);
+}
+function removeContact(me: string, name: string) {
+  try {
+    const all = JSON.parse(localStorage.getItem(CONTACTS_KEY) ?? "{}");
+    all[me] = ((all[me] ?? []) as Contact[]).filter((x) => x.name !== name);
+    localStorage.setItem(CONTACTS_KEY, JSON.stringify(all));
+  } catch { /* yoksay */ }
+  return loadContacts(me);
+}
 
 function loadUsers(): Record<string, UserRec> {
   try {
@@ -54,6 +86,7 @@ export default function Home() {
   const [showServer, setShowServer] = useState(true);
   const [remember, setRemember] = useState(true);
   const [booting, setBooting] = useState(true);
+  const [contacts, setContacts] = useState<Contact[]>([]);
 
   // sekmeler arası senkron için ref'ler (storage event stale closure yemesin)
   const meRef = useRef<string | null>(null);
@@ -62,6 +95,12 @@ export default function Home() {
   peerRef.current = peer;
   const roomKeyRef = useRef<CryptoKey | null>(null);
   roomKeyRef.current = roomKey;
+
+  // giriş yapanın kişi listesini yükle
+  useEffect(() => {
+    if (me) setContacts(loadContacts(me));
+    else setContacts([]);
+  }, [me]);
 
   const serverMsgs = useMemo(() => loadServer(), [msgs, me]); // eslint-disable-line
 
@@ -157,25 +196,30 @@ export default function Home() {
     }
   }
 
-  async function connectPeer() {
+  async function connectPeer(target?: string) {
     setErr("");
     setInfo("");
     if (!myPriv || !me) return;
-    const p = peer.trim().toLowerCase();
+    const myName = meRef.current!;
+    const p = (target ?? peer).trim().toLowerCase();
     if (!p) return setErr("Önce karşı rumuzu yaz.");
-    if (p === me) return setErr("Kendinle sohbet edemezsin :)");
+    if (p === myName) return setErr("Kendinle sohbet edemezsin :)");
     let peerJwk: JsonWebKey | null = null;
-    if (peerJwkText.trim()) {
+    if (!target && peerJwkText.trim()) {
       try {
         peerJwk = JSON.parse(peerJwkText.trim());
       } catch {
         return setErr("Yapıştırılan açık anahtar JSON değil.");
       }
     } else {
-      // önce yerelden, sonra Supabase'ten bul
-      const local = loadUsers()[p];
-      if (local) peerJwk = local.pubJwk;
-      else if (supabaseConfigured && supabase) {
+      // önce kayıtlı kişiler, sonra bu cihaz, sonra Supabase
+      const saved = loadContacts(myName).find((c) => c.name === p);
+      if (saved?.pubJwk) peerJwk = saved.pubJwk;
+      if (!peerJwk) {
+        const local = loadUsers()[p];
+        if (local) peerJwk = local.pubJwk;
+      }
+      if (!peerJwk && supabaseConfigured && supabase) {
         const { data } = await supabase.from("profiles").select("public_key").eq("username", p).single();
         if (data) peerJwk = data.public_key;
       }
@@ -187,6 +231,7 @@ export default function Home() {
       const rk = await deriveRoomKey(myPriv, peerPub);
       setRoomKey(rk);
       setPeer(p);
+      setContacts(saveContact(myName, { name: p, pubJwk: peerJwk, addedAt: Date.now() }));
       setInfo(`${p} ile güvenli kanal kuruldu. Sunucu sadece şifreli metin görecek.`);
       await refresh(p, rk);
     } catch {
@@ -421,12 +466,29 @@ export default function Home() {
               <div className="flex gap-2">
                 <input value={peer} onChange={(e) => setPeer(e.target.value)} placeholder="karşı rumuz (örn. mehmet)"
                   className="flex-1 bg-zinc-800 rounded-lg px-3 py-2 outline-none" />
-                <button onClick={connectPeer} className="bg-emerald-600 rounded-lg px-4 py-2 font-semibold">Bağlan</button>
+                <button onClick={() => connectPeer()} className="bg-emerald-600 rounded-lg px-4 py-2 font-semibold">Bağlan</button>
                 <button onClick={() => refresh()} className="bg-zinc-700 rounded-lg px-3 py-2">↻</button>
               </div>
               <textarea value={peerJwkText} onChange={(e) => setPeerJwkText(e.target.value)}
                 placeholder="(opsiyonel) karşı tarafın açık anahtar JSON'unu yapıştır — Supabase bağlı değilse gerekli"
                 className="w-full bg-zinc-800 rounded-lg px-3 py-2 outline-none text-xs h-16" />
+              {contacts.length > 0 && (
+                <div>
+                  <p className="text-xs text-zinc-400 mb-1">Kişiler (tek tıkla sohbet):</p>
+                  <div className="flex flex-wrap gap-2">
+                    {contacts.map((c) => (
+                      <span key={c.name} className={`flex items-center gap-1 rounded-full pl-3 pr-1 py-1 text-sm ${peer === c.name && roomKey ? "bg-emerald-700" : "bg-zinc-800"}`}>
+                        <button onClick={() => connectPeer(c.name)} className="font-medium">💬 {c.name}</button>
+                        <button
+                          title={`${c.name} kişisini sil`}
+                          onClick={() => me && setContacts(removeContact(me, c.name))}
+                          className="text-zinc-500 hover:text-red-400 rounded-full px-1"
+                        >×</button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               {err && <p className="text-red-400 text-sm">{err}</p>}
               {info && <p className="text-emerald-400 text-sm">{info}</p>}
             </section>
