@@ -115,6 +115,7 @@ export default function Home() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [reply, setReply] = useState<ReplyRef | null>(null);
   const [showEmoji, setShowEmoji] = useState(false);
+  const [showAttach, setShowAttach] = useState(false);
   const [sending, setSending] = useState(false);
 
   // sekmeler arası senkron için ref'ler (storage event stale closure yemesin)
@@ -628,9 +629,35 @@ export default function Home() {
                 )}
                 <div className="flex gap-2 relative">
                   <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()}
-                    placeholder="şifreli mesaj yaz..." className="flex-1 bg-zinc-800 rounded-lg px-3 py-2 outline-none" />
-                  <button onClick={() => setShowEmoji((v) => !v)} title="Emoji" className="bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2">😊</button>
-                  <label className="bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2 cursor-pointer" title="Şifreli resim gönder">
+                    placeholder="şifreli mesaj yaz..." className="flex-1 min-w-0 bg-zinc-800 rounded-lg px-3 py-2 outline-none" />
+                  {/* mobil: ekler + menüsünde */}
+                  <div className="sm:hidden">
+                    <button onClick={() => setShowAttach((v) => !v)} title="Ekle" className="bg-zinc-700 rounded-lg px-3 py-2">＋</button>
+                    {showAttach && (
+                      <div className="absolute bottom-12 right-0 bg-zinc-800 border border-zinc-700 rounded-xl p-2 flex gap-1 z-10">
+                        <button title="Emoji" onClick={() => { setShowEmoji((v) => !v); setShowAttach(false); }} className="text-xl hover:bg-zinc-700 rounded p-1">😊</button>
+                        <label title="Şifreli resim" className="text-xl hover:bg-zinc-700 rounded p-1 cursor-pointer">📷
+                          <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) sendImage(f);
+                            e.target.value = "";
+                            setShowAttach(false);
+                          }} />
+                        </label>
+                        <label title="Şifreli video (max 25MB)" className="text-xl hover:bg-zinc-700 rounded p-1 cursor-pointer">🎬
+                          <input type="file" accept="video/*" className="hidden" onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) sendVideo(f);
+                            e.target.value = "";
+                            setShowAttach(false);
+                          }} />
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                  {/* masaüstü: tek tek butonlar */}
+                  <button onClick={() => setShowEmoji((v) => !v)} title="Emoji" className="hidden sm:block bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2">😊</button>
+                  <label className="hidden sm:block bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2 cursor-pointer" title="Şifreli resim gönder">
                     📷
                     <input type="file" accept="image/*" className="hidden" onChange={(e) => {
                       const f = e.target.files?.[0];
@@ -638,7 +665,7 @@ export default function Home() {
                       e.target.value = "";
                     }} />
                   </label>
-                  <label className="bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2 cursor-pointer" title="Şifreli video gönder (max 25MB)">
+                  <label className="hidden sm:block bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2 cursor-pointer" title="Şifreli video gönder (max 25MB)">
                     🎬
                     <input type="file" accept="video/*" className="hidden" onChange={(e) => {
                       const f = e.target.files?.[0];
@@ -646,8 +673,8 @@ export default function Home() {
                       e.target.value = "";
                     }} />
                   </label>
-                  <button onClick={send} disabled={sending} className="bg-emerald-600 rounded-lg px-4 py-2 font-semibold disabled:opacity-50">
-                    {sending ? "…" : "Gönder"}
+                  <button onClick={send} disabled={sending} className="bg-emerald-600 rounded-lg px-3 sm:px-4 py-2 font-semibold disabled:opacity-50 shrink-0">
+                    {sending ? "…" : <><span className="hidden sm:inline">Gönder</span><span className="sm:hidden">➤</span></>}
                   </button>
                   {showEmoji && (
                     <div className="absolute bottom-12 right-0 bg-zinc-800 border border-zinc-700 rounded-xl p-2 grid grid-cols-8 gap-1 max-w-[280px] z-10">
