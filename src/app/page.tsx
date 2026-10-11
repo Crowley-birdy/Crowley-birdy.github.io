@@ -156,6 +156,15 @@ export default function Home() {
   const seenRef = useRef<Record<string, number>>({});
   const baseSetRef = useRef(false);
   const lastSendRef = useRef({ t: "", at: 0 });
+  // çözülmüş mesaj önbelleği (ct -> ChatMsg): her yenilemede her şeyi baştan çözme
+  const msgCache = useRef(new Map<string, ChatMsg>());
+  function cachePut(ct: string, m: ChatMsg) {
+    msgCache.current.set(ct, m);
+    if (msgCache.current.size > 200) {
+      const first = msgCache.current.keys().next().value;
+      if (first !== undefined) msgCache.current.delete(first);
+    }
+  }
   const notifRef = useRef<NotificationPermission>("default");
   const mutedRef = useRef(false);
 
@@ -166,6 +175,7 @@ export default function Home() {
     keyCacheRef.current = {};
     seenRef.current = {};
     baseSetRef.current = false;
+    msgCache.current.clear();
     setUnread({});
   }, [me]);
 
@@ -371,10 +381,17 @@ export default function Home() {
     }
     const out: ChatMsg[] = [];
     for (const m of all) {
+      const mKind = m.kind ?? "text";
+      const hit = msgCache.current.get(m.ct);
+      if (hit && hit.kind === mKind) {
+        out.push(hit.mine === (m.from === myName) ? hit : { ...hit, mine: m.from === myName });
+        continue; // önbellek: indirme/çözme yok, anında
+      }
       try {
-        const d = await decodeRow(key, m);
+        const d = await decodeRow(key, { ...m, kind: mKind });
+        let entry: ChatMsg;
         if (d.kind === "image") {
-          out.push({ ...m, kind: "image", plain: "data:image/jpeg;base64," + d.body, mine: m.from === myName, reply: d.reply });
+          entry = { ...m, kind: "image", plain: "data:image/jpeg;base64," + d.body, mine: m.from === myName, reply: d.reply };
         } else if (d.kind === "video") {
           let url = "";
           if (supabaseConfigured && supabase && d.biv) {
@@ -388,12 +405,14 @@ export default function Home() {
               }
             } catch { /* aşağıda "(alınamadı)" olur */ }
           }
-          out.push({ ...m, kind: "video", plain: url, mine: m.from === myName, reply: d.reply });
+          entry = { ...m, kind: "video", plain: url, mine: m.from === myName, reply: d.reply };
         } else {
-          out.push({ ...m, kind: "text", plain: d.body, mine: m.from === myName, reply: d.reply });
+          entry = { ...m, kind: "text", plain: d.body, mine: m.from === myName, reply: d.reply };
         }
+        cachePut(m.ct, entry);
+        out.push(entry);
       } catch {
-        out.push({ ...m, plain: "(çözülemedi)", mine: m.from === myName });
+        out.push({ ...m, kind: mKind, plain: "(çözülemedi)", mine: m.from === myName });
       }
     }
     // sadece gerçekten değiştiyse yaz (gereksiz render engelle)
@@ -577,14 +596,20 @@ export default function Home() {
     const now = Date.now();
     if (lastSendRef.current.t === text && now - lastSendRef.current.at < 2000) return;
     lastSendRef.current = { t: text, at: now };
+    const myReply = reply;
     try {
       const { ivB64, ctB64 } = await encryptText(key, JSON.stringify(envelope("text", text)));
-      await publish("text", ivB64, ctB64);
+      // iyimser UI: mesajı bekletmeden göster, sunucuya arka planda yaz
+      const entry: ChatMsg = { from: myName, to: p, iv: ivB64, ct: ctB64, ts: Date.now(), kind: "text", plain: text, mine: true, reply: myReply ?? undefined };
+      cachePut(ctB64, entry);
+      setMsgs((prev) => [...prev, entry]);
       setDraft("");
       setReply(null);
+      await publish("text", ivB64, ctB64);
     } catch (e) {
       lastSendRef.current = { t: "", at: 0 }; // başarısızsa kilidi aç, tekrar denensin
       setErr(e instanceof Error && e.message === "depo-dolu" ? "Tarayıcı deposu doldu." : "Gönderilemedi.");
+      await refresh();
     }
   }
 
@@ -612,6 +637,7 @@ export default function Home() {
     if (!key || !meRef.current || !peerRef.current || sending) return;
     if (!file.type.startsWith("image/")) return setErr("Sadece resim dosyası gönderebilirsin.");
     setSending(true);
+    const myReply = reply;
     try {
       setInfo("Resim şifreleniyor...");
       const bytes = await compressImage(file);
@@ -622,12 +648,19 @@ export default function Home() {
       }
       const payload = JSON.stringify(envelope("image", bufToB64(bytes)));
       const { ivB64, ctB64 } = await encryptText(key, payload);
-      await publish("image", ivB64, ctB64);
+      const entry: ChatMsg = {
+        from: meRef.current!, to: peerRef.current, iv: ivB64, ct: ctB64, ts: Date.now(),
+        kind: "image", plain: "data:image/jpeg;base64," + bufToB64(bytes), mine: true, reply: myReply ?? undefined,
+      };
+      cachePut(ctB64, entry);
+      setMsgs((prev) => [...prev, entry]);
       setReply(null);
       setInfo("");
+      await publish("image", ivB64, ctB64);
     } catch (e) {
       setErr(e instanceof Error && e.message === "depo-dolu" ? "Tarayıcı deposu doldu (demo modu limiti)." : e instanceof Error ? "Gönderilemedi: " + e.message : "Resim gönderilemedi.");
       setInfo("");
+      await refresh();
     } finally {
       setSending(false);
     }
@@ -642,6 +675,8 @@ export default function Home() {
     if (!file.type.startsWith("video/")) return setErr("Sadece video dosyası seçebilirsin.");
     if (file.size > 25 * 1024 * 1024) return setErr("Video 25MB'tan büyük olamaz (ücretsiz kota).");
     setSending(true);
+    const myReply = reply;
+    const previewUrl = URL.createObjectURL(file);
     try {
       setInfo("Video şifrelenip yükleniyor...");
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -651,18 +686,27 @@ export default function Home() {
         .from("chat-media")
         .upload(path, new Blob([b64ToBuf(ctB64)], { type: "application/octet-stream" }));
       if (upErr) {
+        URL.revokeObjectURL(previewUrl);
         setErr("Yüklenemedi: " + upErr.message);
         setInfo("");
         return;
       }
       const payload = JSON.stringify(envelope("video", path, { biv: ivB64 }));
       const e2 = await encryptText(key, payload);
-      await publish("video", e2.ivB64, e2.ctB64);
+      const entry: ChatMsg = {
+        from: meRef.current!, to: peerRef.current, iv: e2.ivB64, ct: e2.ctB64, ts: Date.now(),
+        kind: "video", plain: previewUrl, mine: true, reply: myReply ?? undefined,
+      };
+      cachePut(e2.ctB64, entry);
+      setMsgs((prev) => [...prev, entry]);
       setReply(null);
       setInfo("");
+      await publish("video", e2.ivB64, e2.ctB64);
     } catch (e) {
+      URL.revokeObjectURL(previewUrl);
       setErr(e instanceof Error ? "Gönderilemedi: " + e.message : "Video gönderilemedi.");
       setInfo("");
+      await refresh();
     } finally {
       setSending(false);
     }
@@ -714,6 +758,7 @@ export default function Home() {
     keyCacheRef.current = {};
     seenRef.current = {};
     baseSetRef.current = false;
+    msgCache.current.clear();
     await clearSession();
     setTab("auth");
   }
