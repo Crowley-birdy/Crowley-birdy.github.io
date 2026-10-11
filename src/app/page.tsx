@@ -109,7 +109,7 @@ export default function Home() {
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [err, setErr] = useState("");
   const [info, setInfo] = useState("");
-  const [showServer, setShowServer] = useState(true);
+  const [mobileTab, setMobileTab] = useState<"people" | "chat">("people");
   const [remember, setRemember] = useState(true);
   const [booting, setBooting] = useState(true);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -261,6 +261,7 @@ export default function Home() {
       const rk = await deriveRoomKey(myPriv, peerPub);
       setRoomKey(rk);
       setPeer(p);
+      setMobileTab("chat");
       setContacts(saveContact(myName, { name: p, pubJwk: peerJwk, addedAt: Date.now() }));
       setInfo(`${p} ile güvenli kanal kuruldu. Sunucu sadece şifreli metin görecek.`);
       await refresh(p, rk);
@@ -500,6 +501,7 @@ export default function Home() {
     setRoomKey(null);
     setMsgs([]);
     setPeer("");
+    setMobileTab("people");
     await clearSession();
     setTab("auth");
   }
@@ -513,8 +515,8 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-100 p-4 sm:p-8">
-      <div className="max-w-3xl mx-auto space-y-4">
+    <main className="min-h-screen bg-zinc-950 text-zinc-100 p-4 sm:p-6">
+      <div className="max-w-5xl mx-auto space-y-4 flex flex-col min-h-[calc(100vh-2rem)] sm:min-h-[calc(100vh-3rem)]">
         <header className="flex items-center justify-between">
           <h1 className="text-xl font-bold">🔒 E2E Chat <span className="text-xs font-normal text-zinc-400">uçtan uca şifreli</span></h1>
           <div className="text-xs text-zinc-400">
@@ -523,7 +525,7 @@ export default function Home() {
         </header>
 
         {tab === "auth" || !me ? (
-          <section className="bg-zinc-900 rounded-2xl p-5 space-y-3 border border-zinc-800">
+          <section className="bg-zinc-900 rounded-2xl p-5 space-y-3 border border-zinc-800 max-w-md w-full mx-auto">
             <h2 className="font-semibold">Rumuz + şifre ile giriş</h2>
             <p className="text-sm text-zinc-400">
               Şifren sunucuya hiç gitmez. Özel anahtarın şifrenle şifrelenip saklanır. Sunucu sadece açık anahtar ve şifreli mesaj görür.
@@ -548,157 +550,177 @@ export default function Home() {
             </details>
           </section>
         ) : (
-          <>
-            <section className="bg-zinc-900 rounded-2xl p-5 space-y-3 border border-zinc-800">
-              <div className="flex items-center justify-between">
-                <p>Merhaba <b>{me}</b> 👋</p>
-                <button onClick={logout} className="text-xs text-zinc-400 underline">çıkış</button>
-              </div>
-              <div>
-                <p className="text-xs text-zinc-400 mb-1">Benim açık anahtarım (arkadaşına gönder):</p>
-                <pre className="text-[11px] bg-zinc-800 rounded-lg p-2 overflow-auto max-h-24">{JSON.stringify(myPubJwk)}</pre>
-                <button onClick={() => myPubJwk && navigator.clipboard.writeText(JSON.stringify(myPubJwk))}
-                  className="mt-1 text-xs bg-zinc-700 rounded px-2 py-1">kopyala</button>
-              </div>
-              <div className="flex gap-2">
-                <input value={peer} onChange={(e) => setPeer(e.target.value)} placeholder="karşı rumuz (örn. mehmet)"
-                  className="flex-1 bg-zinc-800 rounded-lg px-3 py-2 outline-none" />
-                <button onClick={() => connectPeer()} className="bg-emerald-600 rounded-lg px-4 py-2 font-semibold">Bağlan</button>
-                <button onClick={() => refresh()} className="bg-zinc-700 rounded-lg px-3 py-2">↻</button>
-              </div>
-              <textarea value={peerJwkText} onChange={(e) => setPeerJwkText(e.target.value)}
-                placeholder="(opsiyonel) karşı tarafın açık anahtar JSON'unu yapıştır — Supabase bağlı değilse gerekli"
-                className="w-full bg-zinc-800 rounded-lg px-3 py-2 outline-none text-xs h-16" />
-              {contacts.length > 0 && (
-                <div>
-                  <p className="text-xs text-zinc-400 mb-1">Kişiler (tek tıkla sohbet):</p>
-                  <div className="flex flex-wrap gap-2">
-                    {contacts.map((c) => (
-                      <span key={c.name} className={`flex items-center gap-1 rounded-full pl-3 pr-1 py-1 text-sm ${peer === c.name && roomKey ? "bg-emerald-700" : "bg-zinc-800"}`}>
-                        <button onClick={() => connectPeer(c.name)} className="font-medium">💬 {c.name}</button>
-                        <button
-                          title={`${c.name} kişisini sil`}
-                          onClick={() => me && setContacts(removeContact(me, c.name))}
-                          className="text-zinc-500 hover:text-red-400 rounded-full px-1"
-                        >×</button>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {err && <p className="text-red-400 text-sm">{err}</p>}
-              {info && <p className="text-emerald-400 text-sm">{info}</p>}
-            </section>
+          <div className="flex flex-col flex-1 min-h-0">
+            <div className="flex items-center justify-between">
+              <p>Merhaba <b>{me}</b> 👋</p>
+              <button onClick={logout} className="text-xs text-zinc-400 underline">çıkış</button>
+            </div>
 
-            {roomKey && (
-              <section className="bg-zinc-900 rounded-2xl p-5 space-y-3 border border-emerald-900">
-                <h3 className="font-semibold text-emerald-300">💬 {peer} ile güvenli sohbet</h3>
-                <div className="space-y-2 max-h-80 overflow-auto">
-                  {msgs.length === 0 && <p className="text-sm text-zinc-500">Henüz mesaj yok. İlk şifreli mesajı gönder!</p>}
-                  {msgs.map((m, i) => (
-                    <div key={i} className={`max-w-[80%] rounded-xl px-3 py-2 text-sm ${m.mine ? "ml-auto bg-emerald-700" : "bg-zinc-700"}`}>
-                      {m.reply && (
-                        <div className="text-xs opacity-80 border-l-2 border-white/40 pl-2 mb-1">
-                          <span className="font-semibold">{m.reply.from}:</span> {m.reply.snippet}
-                        </div>
-                      )}
-                      {m.kind === "image" ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={m.plain} alt="şifreli resim" className="rounded-lg max-w-full" />
-                      ) : m.kind === "video" ? (
-                        m.plain ? (
-                          <video src={m.plain} controls preload="metadata" className="rounded-lg max-w-full" />
-                        ) : (
-                          <p className="italic opacity-70">(video alınamadı)</p>
-                        )
-                      ) : (
-                        <p>{m.plain}</p>
-                      )}
-                      <p className="text-[10px] opacity-60 mt-1 flex items-center gap-2">
-                        <span>{m.from} • {new Date(m.ts).toLocaleTimeString()}</span>
-                        <button title="Yanıtla" onClick={() => setReply({ from: m.from, snippet: snippetOf(m) })} className="hover:opacity-100 opacity-70">↩</button>
-                      </p>
+            {/* mobil sekmeler */}
+            <div className="grid grid-cols-2 gap-2 mt-3 md:hidden">
+              <button onClick={() => setMobileTab("people")}
+                className={`rounded-lg py-2 font-semibold ${mobileTab === "people" ? "bg-emerald-700" : "bg-zinc-800"}`}>👥 Kişiler</button>
+              <button onClick={() => setMobileTab("chat")}
+                className={`rounded-lg py-2 font-semibold ${mobileTab === "chat" ? "bg-emerald-700" : "bg-zinc-800"}`}>💬 Sohbet</button>
+            </div>
+
+            {err && <p className="text-red-400 text-sm mt-2">{err}</p>}
+            {info && <p className="text-emerald-400 text-sm mt-2">{info}</p>}
+
+            <div className="grid md:grid-cols-[260px_1fr] gap-4 mt-3 flex-1 min-h-0">
+              {/* KİŞİLER */}
+              <aside className={`${mobileTab === "people" ? "block" : "hidden"} md:block bg-zinc-900 rounded-2xl p-4 space-y-3 border border-zinc-800 h-fit md:sticky md:top-4`}>
+                <h2 className="font-semibold text-sm text-zinc-300">👥 Kişiler</h2>
+                {contacts.length === 0 && (
+                  <p className="text-xs text-zinc-500">Henüz kişi yok. Aşağıdan ilk kişini ekle 👇</p>
+                )}
+                <div className="space-y-1">
+                  {contacts.map((c) => (
+                    <div key={c.name} className={`flex items-center gap-1 rounded-lg pr-1 ${peer === c.name && roomKey ? "bg-emerald-700" : "bg-zinc-800"}`}>
+                      <button onClick={() => connectPeer(c.name)} className="flex-1 text-left px-3 py-2 font-medium truncate">💬 {c.name}</button>
+                      <button
+                        title={`${c.name} kişisini sil`}
+                        onClick={() => me && setContacts(removeContact(me, c.name))}
+                        className="text-zinc-500 hover:text-red-400 rounded px-1"
+                      >×</button>
                     </div>
                   ))}
                 </div>
-                {reply && (
-                  <div className="flex items-center gap-2 text-xs bg-zinc-800 rounded-lg px-3 py-2">
-                    <span className="flex-1 truncate"><b>{reply.from}:</b> {reply.snippet}</span>
-                    <button onClick={() => setReply(null)} className="text-zinc-400 hover:text-white">✕</button>
+                <details className="text-sm">
+                  <summary className="cursor-pointer text-emerald-300 font-medium">＋ Yeni kişi</summary>
+                  <div className="space-y-2 mt-2">
+                    <div className="flex gap-2">
+                      <input value={peer} onChange={(e) => setPeer(e.target.value)} placeholder="rumuz (örn. mehmet)"
+                        className="flex-1 min-w-0 bg-zinc-800 rounded-lg px-3 py-2 outline-none text-sm" />
+                      <button onClick={() => connectPeer()} className="bg-emerald-600 rounded-lg px-3 py-2 font-semibold text-sm shrink-0">Bağlan</button>
+                    </div>
+                    <textarea value={peerJwkText} onChange={(e) => setPeerJwkText(e.target.value)}
+                      placeholder="Açık anahtar (Supabase bağlı değilse gerekli)"
+                      className="w-full bg-zinc-800 rounded-lg px-3 py-2 outline-none text-xs h-14" />
                   </div>
-                )}
-                <div className="flex gap-2 relative">
-                  <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()}
-                    placeholder="şifreli mesaj yaz..." className="flex-1 min-w-0 bg-zinc-800 rounded-lg px-3 py-2 outline-none" />
-                  {/* mobil: ekler + menüsünde */}
-                  <div className="sm:hidden">
-                    <button onClick={() => setShowAttach((v) => !v)} title="Ekle" className="bg-zinc-700 rounded-lg px-3 py-2">＋</button>
-                    {showAttach && (
-                      <div className="absolute bottom-12 right-0 bg-zinc-800 border border-zinc-700 rounded-xl p-2 flex gap-1 z-10">
-                        <button title="Emoji" onClick={() => { setShowEmoji((v) => !v); setShowAttach(false); }} className="text-xl hover:bg-zinc-700 rounded p-1">😊</button>
-                        <label title="Şifreli resim" className="text-xl hover:bg-zinc-700 rounded p-1 cursor-pointer">📷
-                          <input type="file" accept="image/*" className="hidden" onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (f) sendImage(f);
-                            e.target.value = "";
-                            setShowAttach(false);
-                          }} />
-                        </label>
-                        <label title="Şifreli video (max 25MB)" className="text-xl hover:bg-zinc-700 rounded p-1 cursor-pointer">🎬
-                          <input type="file" accept="video/*" className="hidden" onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (f) sendVideo(f);
-                            e.target.value = "";
-                            setShowAttach(false);
-                          }} />
-                        </label>
-                      </div>
-                    )}
-                  </div>
-                  {/* masaüstü: tek tek butonlar */}
-                  <button onClick={() => setShowEmoji((v) => !v)} title="Emoji" className="hidden sm:block bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2">😊</button>
-                  <label className="hidden sm:block bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2 cursor-pointer" title="Şifreli resim gönder">
-                    📷
-                    <input type="file" accept="image/*" className="hidden" onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) sendImage(f);
-                      e.target.value = "";
-                    }} />
-                  </label>
-                  <label className="hidden sm:block bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2 cursor-pointer" title="Şifreli video gönder (max 25MB)">
-                    🎬
-                    <input type="file" accept="video/*" className="hidden" onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) sendVideo(f);
-                      e.target.value = "";
-                    }} />
-                  </label>
-                  <button onClick={send} disabled={sending} className="bg-emerald-600 rounded-lg px-3 sm:px-4 py-2 font-semibold disabled:opacity-50 shrink-0">
-                    {sending ? "…" : <><span className="hidden sm:inline">Gönder</span><span className="sm:hidden">➤</span></>}
-                  </button>
-                  {showEmoji && (
-                    <div className="absolute bottom-12 right-0 bg-zinc-800 border border-zinc-700 rounded-xl p-2 grid grid-cols-8 gap-1 max-w-[280px] z-10">
-                      {EMOJIS.map((e) => (
-                        <button key={e} onClick={() => setDraft((d) => d + e)} className="text-xl hover:bg-zinc-700 rounded p-0.5">{e}</button>
+                </details>
+                <details className="text-xs text-zinc-400">
+                  <summary className="cursor-pointer">Benim açık anahtarım</summary>
+                  <pre className="text-[11px] bg-zinc-800 rounded-lg p-2 overflow-auto max-h-24 mt-1">{JSON.stringify(myPubJwk)}</pre>
+                  <button onClick={() => myPubJwk && navigator.clipboard.writeText(JSON.stringify(myPubJwk))}
+                    className="mt-1 text-xs bg-zinc-700 rounded px-2 py-1">kopyala</button>
+                </details>
+              </aside>
+
+              {/* SOHBET */}
+              <section className={`${mobileTab === "chat" ? "flex" : "hidden"} md:flex flex-col bg-zinc-900 rounded-2xl p-4 sm:p-5 space-y-3 border border-emerald-900 min-h-[60vh] md:min-h-[65vh]`}>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold text-emerald-300">
+                    {roomKey ? `💬 ${peer} ile güvenli sohbet` : "💬 Sohbet"}
+                  </h3>
+                  {roomKey && <button onClick={() => refresh()} title="Yenile" className="bg-zinc-700 rounded-lg px-2 py-1 text-sm">↻</button>}
+                </div>
+                {!roomKey ? (
+                  <p className="text-sm text-zinc-500 flex-1 flex items-center justify-center text-center">
+                    Başlamak için kişilerinden birini seç<br />veya yeni kişi ekle 👈
+                  </p>
+                ) : (
+                  <>
+                    <div className="space-y-2 flex-1 overflow-auto min-h-[40vh]">
+                      {msgs.length === 0 && <p className="text-sm text-zinc-500">Henüz mesaj yok. İlk şifreli mesajı gönder!</p>}
+                      {msgs.map((m, i) => (
+                        <div key={i} className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${m.mine ? "ml-auto bg-emerald-700" : "bg-zinc-700"}`}>
+                          {m.reply && (
+                            <div className="text-xs opacity-80 border-l-2 border-white/40 pl-2 mb-1">
+                              <span className="font-semibold">{m.reply.from}:</span> {m.reply.snippet}
+                            </div>
+                          )}
+                          {m.kind === "image" ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={m.plain} alt="şifreli resim" className="rounded-lg max-w-full" />
+                          ) : m.kind === "video" ? (
+                            m.plain ? (
+                              <video src={m.plain} controls preload="metadata" className="rounded-lg max-w-full" />
+                            ) : (
+                              <p className="italic opacity-70">(video alınamadı)</p>
+                            )
+                          ) : (
+                            <p className="break-words">{m.plain}</p>
+                          )}
+                          <p className="text-[10px] opacity-60 mt-1 flex items-center gap-2">
+                            <span>{m.from} • {new Date(m.ts).toLocaleTimeString()}</span>
+                            <button title="Yanıtla" onClick={() => setReply({ from: m.from, snippet: snippetOf(m) })} className="hover:opacity-100 opacity-70">↩</button>
+                          </p>
+                        </div>
                       ))}
                     </div>
-                  )}
-                </div>
-
-                <div className="pt-2 border-t border-zinc-800">
-                  <label className="text-xs flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={showServer} onChange={(e) => setShowServer(e.target.checked)} />
-                    Sunucunun gördüğünü göster (sadece şifreli metin)
-                  </label>
-                  {showServer && (
-                    <pre className="text-[11px] bg-black rounded-lg p-2 mt-2 overflow-auto max-h-40 text-zinc-400">
-                      {JSON.stringify(serverMsgs.filter((m) => (m.from === me && m.to === peer) || (m.from === peer && m.to === me)), (k, v) => typeof v === "string" && v.length > 120 ? v.slice(0, 120) + `…(${v.length} karakter)` : v, 1)}
-                    </pre>
-                  )}
-                </div>
+                    {reply && (
+                      <div className="flex items-center gap-2 text-xs bg-zinc-800 rounded-lg px-3 py-2">
+                        <span className="flex-1 truncate"><b>{reply.from}:</b> {reply.snippet}</span>
+                        <button onClick={() => setReply(null)} className="text-zinc-400 hover:text-white">✕</button>
+                      </div>
+                    )}
+                    <div className="flex gap-2 relative">
+                      <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()}
+                        placeholder="şifreli mesaj yaz..." className="flex-1 min-w-0 bg-zinc-800 rounded-lg px-3 py-2 outline-none" />
+                      <div className="sm:hidden">
+                        <button onClick={() => setShowAttach((v) => !v)} title="Ekle" className="bg-zinc-700 rounded-lg px-3 py-2">＋</button>
+                        {showAttach && (
+                          <div className="absolute bottom-12 right-0 bg-zinc-800 border border-zinc-700 rounded-xl p-2 flex gap-1 z-10">
+                            <button title="Emoji" onClick={() => { setShowEmoji((v) => !v); setShowAttach(false); }} className="text-xl hover:bg-zinc-700 rounded p-1">😊</button>
+                            <label title="Şifreli resim" className="text-xl hover:bg-zinc-700 rounded p-1 cursor-pointer">📷
+                              <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                if (f) sendImage(f);
+                                e.target.value = "";
+                                setShowAttach(false);
+                              }} />
+                            </label>
+                            <label title="Şifreli video (max 25MB)" className="text-xl hover:bg-zinc-700 rounded p-1 cursor-pointer">🎬
+                              <input type="file" accept="video/*" className="hidden" onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                if (f) sendVideo(f);
+                                e.target.value = "";
+                                setShowAttach(false);
+                              }} />
+                            </label>
+                          </div>
+                        )}
+                      </div>
+                      <button onClick={() => setShowEmoji((v) => !v)} title="Emoji" className="hidden sm:block bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2">😊</button>
+                      <label className="hidden sm:block bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2 cursor-pointer" title="Şifreli resim gönder">
+                        📷
+                        <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) sendImage(f);
+                          e.target.value = "";
+                        }} />
+                      </label>
+                      <label className="hidden sm:block bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2 cursor-pointer" title="Şifreli video gönder (max 25MB)">
+                        🎬
+                        <input type="file" accept="video/*" className="hidden" onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) sendVideo(f);
+                          e.target.value = "";
+                        }} />
+                      </label>
+                      <button onClick={send} disabled={sending} className="bg-emerald-600 rounded-lg px-3 sm:px-4 py-2 font-semibold disabled:opacity-50 shrink-0">
+                        {sending ? "…" : <><span className="hidden sm:inline">Gönder</span><span className="sm:hidden">➤</span></>}
+                      </button>
+                      {showEmoji && (
+                        <div className="absolute bottom-12 right-0 bg-zinc-800 border border-zinc-700 rounded-xl p-2 grid grid-cols-8 gap-1 max-w-[280px] z-10">
+                          {EMOJIS.map((e) => (
+                            <button key={e} onClick={() => setDraft((d) => d + e)} className="text-xl hover:bg-zinc-700 rounded p-0.5">{e}</button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <details className="text-xs text-zinc-500">
+                      <summary className="cursor-pointer">Sunucunun gördüğü (şifreli)</summary>
+                      <pre className="text-[11px] bg-black rounded-lg p-2 mt-1 overflow-auto max-h-40 text-zinc-400">
+                        {JSON.stringify(serverMsgs.filter((m) => (m.from === me && m.to === peer) || (m.from === peer && m.to === me)), (k, v) => typeof v === "string" && v.length > 120 ? v.slice(0, 120) + `…(${v.length} karakter)` : v, 1)}
+                      </pre>
+                    </details>
+                  </>
+                )}
               </section>
-            )}
-          </>
+            </div>
+          </div>
         )}
 
         <footer className="text-xs text-zinc-500 leading-relaxed">
