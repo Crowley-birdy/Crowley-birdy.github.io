@@ -11,13 +11,39 @@ import {
   encryptBytes,
   decryptBytes,
   bufToB64,
+  b64ToBuf,
 } from "@/lib/crypto";
 import { supabase, supabaseConfigured } from "@/lib/supabase";
 import { saveSession, loadSession, clearSession, toUnextractable } from "@/lib/session";
 
 type UserRec = { pubJwk: JsonWebKey; encryptedPrivB64: string; saltB64: string; ivB64: string };
 type ServerMsg = { from: string; to: string; iv: string; ct: string; ts: number; kind: string };
-type ChatMsg = ServerMsg & { plain: string; mine: boolean };
+type ReplyRef = { from: string; snippet: string };
+type ChatMsg = ServerMsg & { plain: string; mine: boolean; reply?: ReplyRef };
+// Şifreli zarf: yanıt alıntısı da şifrenin İÇİNDE taşınır (sunucu göremez)
+type Envelope = { v: 1; kind: string; body: string; biv?: string; reply?: ReplyRef };
+
+const EMOJIS = ["😀","😁","😂","🤣","😊","😍","😘","😎","🤔","😐","🙄","😴","😷","🤒","😢","😭","😡","🤯","🥳","😇","🙏","👍","👎","👏","🙌","🤝","✌️","🤞","👀","🧠","❤️","💔","💯","🔥","🎉","⭐","🌙","☀️","🌈","⚡","🎬","📷","🎵","⚽","🚀","🍕","☕","🌹","🐱","🐶"];
+
+async function decodeRow(key: CryptoKey, m: ServerMsg): Promise<{ kind: string; body: string; reply?: ReplyRef; biv?: string }> {
+  if (m.kind === "video") {
+    const p = JSON.parse(await decryptText(key, m.iv, m.ct)) as Envelope;
+    return { kind: "video", body: p.body, reply: p.reply, biv: p.biv };
+  }
+  if (m.kind === "image") {
+    try {
+      const p = JSON.parse(await decryptText(key, m.iv, m.ct)) as Envelope;
+      if (p && p.v === 1) return { kind: p.kind ?? "image", body: p.body, reply: p.reply };
+    } catch { /* eski format: ham şifreli jpeg */ }
+    return { kind: "image", body: bufToB64(await decryptBytes(key, m.iv, m.ct)) };
+  }
+  const t = await decryptText(key, m.iv, m.ct);
+  try {
+    const p = JSON.parse(t) as Envelope;
+    if (p && p.v === 1) return { kind: "text", body: p.body, reply: p.reply };
+  } catch { /* eski düz metin */ }
+  return { kind: "text", body: t };
+}
 
 const USERS_KEY = "e2e_users_v1";
 const SERVER_KEY = "e2e_server_v1";
@@ -87,6 +113,9 @@ export default function Home() {
   const [remember, setRemember] = useState(true);
   const [booting, setBooting] = useState(true);
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [reply, setReply] = useState<ReplyRef | null>(null);
+  const [showEmoji, setShowEmoji] = useState(false);
+  const [sending, setSending] = useState(false);
 
   // sekmeler arası senkron için ref'ler (storage event stale closure yemesin)
   const meRef = useRef<string | null>(null);
@@ -270,12 +299,25 @@ export default function Home() {
     const out: ChatMsg[] = [];
     for (const m of all) {
       try {
-        if (m.kind === "image") {
-          const bytes = await decryptBytes(key, m.iv, m.ct);
-          out.push({ ...m, plain: "data:image/jpeg;base64," + bufToB64(bytes), mine: m.from === myName });
+        const d = await decodeRow(key, m);
+        if (d.kind === "image") {
+          out.push({ ...m, kind: "image", plain: "data:image/jpeg;base64," + d.body, mine: m.from === myName, reply: d.reply });
+        } else if (d.kind === "video") {
+          let url = "";
+          if (supabaseConfigured && supabase && d.biv) {
+            try {
+              const { data } = supabase!.storage.from("chat-media").getPublicUrl(d.body);
+              const res = await fetch(data.publicUrl);
+              if (res.ok) {
+                const encB64 = bufToB64(new Uint8Array(await res.arrayBuffer()));
+                const raw = await decryptBytes(key, d.biv, encB64);
+                url = URL.createObjectURL(new Blob([raw as unknown as BlobPart], { type: "video/mp4" }));
+              }
+            } catch { /* aşağıda "(alınamadı)" olur */ }
+          }
+          out.push({ ...m, kind: "video", plain: url, mine: m.from === myName, reply: d.reply });
         } else {
-          const plain = await decryptText(key, m.iv, m.ct);
-          out.push({ ...m, plain, mine: m.from === myName });
+          out.push({ ...m, kind: "text", plain: d.body, mine: m.from === myName, reply: d.reply });
         }
       } catch {
         out.push({ ...m, plain: "(çözülemedi)", mine: m.from === myName });
@@ -288,25 +330,52 @@ export default function Home() {
     });
   }
 
+  function snippetOf(m: ChatMsg): string {
+    if (m.kind === "image") return "📷 resim";
+    if (m.kind === "video") return "🎬 video";
+    return m.plain.length > 80 ? m.plain.slice(0, 80) + "…" : m.plain;
+  }
+
+  // Şifreli satırı yayınla: yerelde + Supabase'te (sunucu hep şifreli görür)
+  async function publish(kind: string, ivB64: string, ctB64: string) {
+    const myName = meRef.current!;
+    const p = peerRef.current;
+    const row: ServerMsg = { from: myName, to: p, iv: ivB64, ct: ctB64, ts: Date.now(), kind };
+    const all = loadServer();
+    all.push(row);
+    try {
+      localStorage.setItem(SERVER_KEY, JSON.stringify(all));
+    } catch {
+      if (!supabaseConfigured) throw new Error("depo-dolu");
+    }
+    try {
+      new BroadcastChannel(SERVER_KEY).postMessage("new");
+    } catch { /* yoksa polling yakalar */ }
+    if (supabaseConfigured && supabase) {
+      const { error } = await supabase!.from("messages").insert({ sender: myName, receiver: p, iv: ivB64, ct: ctB64, kind });
+      if (error) throw new Error(error.message);
+    }
+    await refresh();
+  }
+
+  function envelope(kind: string, body: string, extra?: Partial<Envelope>): Envelope {
+    return { v: 1, kind, body, ...extra, reply: reply ?? undefined };
+  }
+
   async function send() {
     setErr("");
     const myName = meRef.current;
     const p = peerRef.current;
     const key = roomKeyRef.current;
-    if (!draft.trim() || !key || !myName || !p) return;
-    const { ivB64, ctB64 } = await encryptText(key, draft.trim());
-    const row: ServerMsg = { from: myName, to: p, iv: ivB64, ct: ctB64, ts: Date.now(), kind: "text" };
-    const all = loadServer();
-    all.push(row);
-    localStorage.setItem(SERVER_KEY, JSON.stringify(all));
+    if (!draft.trim() || !key || !myName || !p || sending) return;
     try {
-      new BroadcastChannel(SERVER_KEY).postMessage("new");
-    } catch { /* yoksa polling yakalar */ }
-    if (supabaseConfigured && supabase) {
-      await supabase!.from("messages").insert({ sender: myName, receiver: p, iv: ivB64, ct: ctB64, kind: "text" });
+      const { ivB64, ctB64 } = await encryptText(key, JSON.stringify(envelope("text", draft.trim())));
+      await publish("text", ivB64, ctB64);
+      setDraft("");
+      setReply(null);
+    } catch (e) {
+      setErr(e instanceof Error && e.message === "depo-dolu" ? "Tarayıcı deposu doldu." : "Gönderilemedi.");
     }
-    setDraft("");
-    await refresh();
   }
 
   // Resmi küçültüp JPEG'e çevir (şifreli yükü küçük tutar, max ~1024px)
@@ -329,36 +398,63 @@ export default function Home() {
   async function sendImage(file: File) {
     setErr("");
     setInfo("");
-    const myName = meRef.current;
-    const p = peerRef.current;
     const key = roomKeyRef.current;
-    if (!key || !myName || !p) return;
+    if (!key || !meRef.current || !peerRef.current || sending) return;
     if (!file.type.startsWith("image/")) return setErr("Sadece resim dosyası gönderebilirsin.");
+    setSending(true);
     try {
       setInfo("Resim şifreleniyor...");
       const bytes = await compressImage(file);
-      if (bytes.length > 900 * 1024) return setErr("Resim hâlâ çok büyük, daha küçük bir resim dene.");
+      if (bytes.length > 900 * 1024) {
+        setErr("Resim hâlâ çok büyük, daha küçük bir resim dene.");
+        setInfo("");
+        return;
+      }
+      const payload = JSON.stringify(envelope("image", bufToB64(bytes)));
+      const { ivB64, ctB64 } = await encryptText(key, payload);
+      await publish("image", ivB64, ctB64);
+      setReply(null);
+      setInfo("");
+    } catch (e) {
+      setErr(e instanceof Error && e.message === "depo-dolu" ? "Tarayıcı deposu doldu (demo modu limiti)." : e instanceof Error ? "Gönderilemedi: " + e.message : "Resim gönderilemedi.");
+      setInfo("");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function sendVideo(file: File) {
+    setErr("");
+    setInfo("");
+    const key = roomKeyRef.current;
+    if (!key || !meRef.current || !peerRef.current || sending) return;
+    if (!supabaseConfigured || !supabase) return setErr("Video için Supabase bağlantısı gerekli (demo modunda yok).");
+    if (!file.type.startsWith("video/")) return setErr("Sadece video dosyası seçebilirsin.");
+    if (file.size > 25 * 1024 * 1024) return setErr("Video 25MB'tan büyük olamaz (ücretsiz kota).");
+    setSending(true);
+    try {
+      setInfo("Video şifrelenip yükleniyor...");
+      const bytes = new Uint8Array(await file.arrayBuffer());
       const { ivB64, ctB64 } = await encryptBytes(key, bytes);
-      const row: ServerMsg = { from: myName, to: p, iv: ivB64, ct: ctB64, ts: Date.now(), kind: "image" };
-      const all = loadServer();
-      all.push(row);
-      try {
-        localStorage.setItem(SERVER_KEY, JSON.stringify(all));
-      } catch {
-        return setErr("Tarayıcı deposu doldu (demo modu limiti). Supabase bağlıyken bu sorun olmaz.");
+      const path = `${meRef.current}/${Date.now()}-${Math.random().toString(36).slice(2)}.enc`;
+      const { error: upErr } = await supabase!.storage
+        .from("chat-media")
+        .upload(path, new Blob([b64ToBuf(ctB64)], { type: "application/octet-stream" }));
+      if (upErr) {
+        setErr("Yüklenemedi: " + upErr.message);
+        setInfo("");
+        return;
       }
-      try {
-        new BroadcastChannel(SERVER_KEY).postMessage("new");
-      } catch { /* yoksa polling yakalar */ }
-      if (supabaseConfigured && supabase) {
-        const { error } = await supabase!.from("messages").insert({ sender: myName, receiver: p, iv: ivB64, ct: ctB64, kind: "image" });
-        if (error) return setErr("Gönderilemedi: " + error.message);
-      }
+      const payload = JSON.stringify(envelope("video", path, { biv: ivB64 }));
+      const e2 = await encryptText(key, payload);
+      await publish("video", e2.ivB64, e2.ctB64);
+      setReply(null);
       setInfo("");
-      await refresh();
-    } catch {
-      setErr("Resim gönderilemedi.");
+    } catch (e) {
+      setErr(e instanceof Error ? "Gönderilemedi: " + e.message : "Video gönderilemedi.");
       setInfo("");
+    } finally {
+      setSending(false);
     }
   }
 
@@ -500,19 +596,40 @@ export default function Home() {
                   {msgs.length === 0 && <p className="text-sm text-zinc-500">Henüz mesaj yok. İlk şifreli mesajı gönder!</p>}
                   {msgs.map((m, i) => (
                     <div key={i} className={`max-w-[80%] rounded-xl px-3 py-2 text-sm ${m.mine ? "ml-auto bg-emerald-700" : "bg-zinc-700"}`}>
+                      {m.reply && (
+                        <div className="text-xs opacity-80 border-l-2 border-white/40 pl-2 mb-1">
+                          <span className="font-semibold">{m.reply.from}:</span> {m.reply.snippet}
+                        </div>
+                      )}
                       {m.kind === "image" ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={m.plain} alt="şifreli resim" className="rounded-lg max-w-full" />
+                      ) : m.kind === "video" ? (
+                        m.plain ? (
+                          <video src={m.plain} controls preload="metadata" className="rounded-lg max-w-full" />
+                        ) : (
+                          <p className="italic opacity-70">(video alınamadı)</p>
+                        )
                       ) : (
                         <p>{m.plain}</p>
                       )}
-                      <p className="text-[10px] opacity-60 mt-1">{m.from} • {new Date(m.ts).toLocaleTimeString()}</p>
+                      <p className="text-[10px] opacity-60 mt-1 flex items-center gap-2">
+                        <span>{m.from} • {new Date(m.ts).toLocaleTimeString()}</span>
+                        <button title="Yanıtla" onClick={() => setReply({ from: m.from, snippet: snippetOf(m) })} className="hover:opacity-100 opacity-70">↩</button>
+                      </p>
                     </div>
                   ))}
                 </div>
-                <div className="flex gap-2">
+                {reply && (
+                  <div className="flex items-center gap-2 text-xs bg-zinc-800 rounded-lg px-3 py-2">
+                    <span className="flex-1 truncate"><b>{reply.from}:</b> {reply.snippet}</span>
+                    <button onClick={() => setReply(null)} className="text-zinc-400 hover:text-white">✕</button>
+                  </div>
+                )}
+                <div className="flex gap-2 relative">
                   <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()}
                     placeholder="şifreli mesaj yaz..." className="flex-1 bg-zinc-800 rounded-lg px-3 py-2 outline-none" />
+                  <button onClick={() => setShowEmoji((v) => !v)} title="Emoji" className="bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2">😊</button>
                   <label className="bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2 cursor-pointer" title="Şifreli resim gönder">
                     📷
                     <input type="file" accept="image/*" className="hidden" onChange={(e) => {
@@ -521,7 +638,24 @@ export default function Home() {
                       e.target.value = "";
                     }} />
                   </label>
-                  <button onClick={send} className="bg-emerald-600 rounded-lg px-4 py-2 font-semibold">Gönder</button>
+                  <label className="bg-zinc-700 hover:bg-zinc-600 rounded-lg px-3 py-2 cursor-pointer" title="Şifreli video gönder (max 25MB)">
+                    🎬
+                    <input type="file" accept="video/*" className="hidden" onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) sendVideo(f);
+                      e.target.value = "";
+                    }} />
+                  </label>
+                  <button onClick={send} disabled={sending} className="bg-emerald-600 rounded-lg px-4 py-2 font-semibold disabled:opacity-50">
+                    {sending ? "…" : "Gönder"}
+                  </button>
+                  {showEmoji && (
+                    <div className="absolute bottom-12 right-0 bg-zinc-800 border border-zinc-700 rounded-xl p-2 grid grid-cols-8 gap-1 max-w-[280px] z-10">
+                      {EMOJIS.map((e) => (
+                        <button key={e} onClick={() => setDraft((d) => d + e)} className="text-xl hover:bg-zinc-700 rounded p-0.5">{e}</button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-2 border-t border-zinc-800">

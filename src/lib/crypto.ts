@@ -8,7 +8,7 @@ export function bufToB64(buf: ArrayBuffer | Uint8Array): string {
   return btoa(s);
 }
 
-export function b64ToBuf(b64: string): Uint8Array {
+export function b64ToBuf(b64: string): Uint8Array<ArrayBuffer> {
   const s = atob(b64);
   const out = new Uint8Array(s.length);
   for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
@@ -110,7 +110,7 @@ export async function encryptBytes(roomKey: CryptoKey, data: Uint8Array) {
   return { ivB64: bufToB64(iv), ctB64: bufToB64(ct) };
 }
 
-export async function decryptBytes(roomKey: CryptoKey, ivB64: string, ctB64: string): Promise<Uint8Array> {
+export async function decryptBytes(roomKey: CryptoKey, ivB64: string, ctB64: string): Promise<Uint8Array<ArrayBuffer>> {
   const plain = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: b64ToBuf(ivB64) as BufferSource },
     roomKey,

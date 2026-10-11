@@ -36,3 +36,11 @@ create policy "mesaj yazma" on messages for insert with check (true);
 -- Realtime: Database > Replication > messages tablosunu aç
 -- veya SQL ile:
 -- alter publication supabase_realtime add table messages;
+
+-- Şifreli video/medya deposu (içerik zaten şifreli, bucket açık olabilir)
+insert into storage.buckets (id, name, public) values ('chat-media','chat-media', true)
+on conflict (id) do update set public = true;
+drop policy if exists "chat-media okuma" on storage.objects;
+create policy "chat-media okuma" on storage.objects for select using (bucket_id = 'chat-media');
+drop policy if exists "chat-media yazma" on storage.objects;
+create policy "chat-media yazma" on storage.objects for insert with check (bucket_id = 'chat-media');
