@@ -117,6 +117,9 @@ export default function Home() {
   const [showEmoji, setShowEmoji] = useState(false);
   const [showAttach, setShowAttach] = useState(false);
   const [sending, setSending] = useState(false);
+  const [unread, setUnread] = useState<Record<string, number>>({});
+  const [notifPerm, setNotifPerm] = useState<NotificationPermission>("default");
+  const [muted, setMuted] = useState(false);
 
   // sekmeler arası senkron için ref'ler (storage event stale closure yemesin)
   const meRef = useRef<string | null>(null);
@@ -125,12 +128,28 @@ export default function Home() {
   peerRef.current = peer;
   const roomKeyRef = useRef<CryptoKey | null>(null);
   roomKeyRef.current = roomKey;
+  const myPrivRef = useRef<CryptoKey | null>(null);
+  myPrivRef.current = myPriv;
+  // bildirimler için: kişi -> oda anahtarı önbelleği, görülen son zamanlar
+  const keyCacheRef = useRef<Record<string, CryptoKey>>({});
+  const seenRef = useRef<Record<string, number>>({});
+  const baseSetRef = useRef(false);
+  const notifRef = useRef<NotificationPermission>("default");
+  const mutedRef = useRef(false);
 
   // giriş yapanın kişi listesini yükle
   useEffect(() => {
     if (me) setContacts(loadContacts(me));
     else setContacts([]);
+    keyCacheRef.current = {};
+    seenRef.current = {};
+    baseSetRef.current = false;
+    setUnread({});
   }, [me]);
+
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
 
   const serverMsgs = useMemo(() => loadServer(), [msgs, me]); // eslint-disable-line
 
@@ -330,7 +349,84 @@ export default function Home() {
       if (prev.length === out.length && prev.every((v, i) => v.ct === out[i].ct && v.plain === out[i].plain)) return prev;
       return out;
     });
+    // bu sohbet ekranda: okundu say
+    seenRef.current[p] = out.reduce((a, m) => Math.max(a, m.ts), seenRef.current[p] ?? 0);
+    setUnread((u) => (u[p] ? { ...u, [p]: 0 } : u));
   }
+
+  // Yeni mesaj avcısı: gelen kutusunu yoklar, rozet + ses + bildirim çıkarır
+  useEffect(() => {
+    if (!me || !myPriv) return;
+    try {
+      notifRef.current = Notification.permission;
+      setNotifPerm(Notification.permission);
+    } catch { /* desteklenmiyor */ }
+    let stop = false;
+    const tick = async () => {
+      const myName = meRef.current;
+      if (!myName || stop) return;
+      try {
+        let incoming: { from: string; iv: string; ct: string; kind: string; ts: number }[] = [];
+        if (supabaseConfigured && supabase) {
+          const { data } = await supabase!
+            .from("messages")
+            .select("sender,iv,ct,kind,created_at")
+            .eq("receiver", myName)
+            .order("created_at", { ascending: false })
+            .limit(30);
+          if (data) {
+            incoming = data.map((m: { sender: string; iv: string; ct: string; kind?: string; created_at: string }) => ({
+              from: m.sender,
+              iv: m.iv,
+              ct: m.ct,
+              kind: m.kind ?? "text",
+              ts: new Date(m.created_at).getTime(),
+            }));
+          }
+        } else {
+          incoming = loadServer()
+            .filter((m) => m.to === myName)
+            .map((m) => ({ from: m.from, iv: m.iv, ct: m.ct, kind: (m as ServerMsg).kind ?? "text", ts: m.ts }));
+        }
+        // eskiden yeniye işle
+        for (const m of incoming.reverse()) {
+          if ((seenRef.current[m.from] ?? 0) >= m.ts) continue;
+          seenRef.current[m.from] = m.ts;
+          if (m.from === myName) continue;
+          if (!baseSetRef.current) continue; // ilk tur: sessizce tabanı işaretle
+          const viewing = m.from === peerRef.current && !document.hidden;
+          const key = await roomKeyFor(m.from);
+          let snippet = "Yeni mesaj";
+          if (key) {
+            try {
+              const d = await decodeRow(key, { from: m.from, to: myName, iv: m.iv, ct: m.ct, ts: m.ts, kind: m.kind });
+              snippet = d.kind === "image" ? "📷 resim gönderdi" : d.kind === "video" ? "🎬 video gönderdi" : d.body.slice(0, 100);
+            } catch { /* özet çıkmazsa genel metin */ }
+          }
+          if (!viewing) {
+            setUnread((u) => ({ ...u, [m.from]: (u[m.from] ?? 0) + 1 }));
+            beep();
+            notifyUser(m.from, snippet);
+          }
+        }
+        baseSetRef.current = true;
+      } catch { /* ağ hatasında sessiz geç, sonraki tur dener */ }
+    };
+    baseSetRef.current = false;
+    const t = setInterval(tick, 5000);
+    void tick();
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me, myPriv]);
+
+  // Sekme başlığında okunmadı sayacı
+  const unreadTotal = Object.values(unread).reduce((a, b) => a + b, 0);
+  useEffect(() => {
+    document.title = unreadTotal > 0 ? `(${unreadTotal}) E2E Chat` : "E2E Chat";
+  }, [unreadTotal]);
 
   function snippetOf(m: ChatMsg): string {
     if (m.kind === "image") return "📷 resim";
@@ -362,6 +458,60 @@ export default function Home() {
 
   function envelope(kind: string, body: string, extra?: Partial<Envelope>): Envelope {
     return { v: 1, kind, body, ...extra, reply: reply ?? undefined };
+  }
+
+  // Bildirim için: bir gönderenin oda anahtarını bul (önbellekli)
+  async function roomKeyFor(name: string): Promise<CryptoKey | null> {
+    if (keyCacheRef.current[name]) return keyCacheRef.current[name];
+    const priv = myPrivRef.current;
+    if (!priv) return null;
+    let jwk: JsonWebKey | null = loadContacts(meRef.current ?? "").find((c) => c.name === name)?.pubJwk ?? null;
+    if (!jwk) jwk = loadUsers()[name]?.pubJwk ?? null;
+    if (!jwk && supabaseConfigured && supabase) {
+      const { data } = await supabase.from("profiles").select("public_key").eq("username", name).single();
+      if (data?.public_key) jwk = data.public_key;
+    }
+    if (!jwk) return null;
+    try {
+      const k = await deriveRoomKey(priv, await importPeerPublicKey(jwk));
+      keyCacheRef.current[name] = k;
+      return k;
+    } catch {
+      return null;
+    }
+  }
+
+  function beep() {
+    if (mutedRef.current) return;
+    try {
+      const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const ctx = new Ctx();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.frequency.value = 880;
+      g.gain.value = 0.07;
+      o.start();
+      o.stop(ctx.currentTime + 0.15);
+      o.onended = () => void ctx.close();
+    } catch { /* sessiz devam */ }
+  }
+
+  function notifyUser(from: string, snippet: string) {
+    if (notifRef.current !== "granted") return;
+    try {
+      const n = new Notification(`💬 ${from}`, { body: snippet, tag: `e2e-${from}` });
+      n.onclick = () => window.focus();
+    } catch { /* izin yoksa geç */ }
+  }
+
+  async function enableNotif() {
+    try {
+      const p = await Notification.requestPermission();
+      notifRef.current = p;
+      setNotifPerm(p);
+    } catch { /* desteklenmiyor */ }
   }
 
   async function send() {
@@ -502,6 +652,10 @@ export default function Home() {
     setMsgs([]);
     setPeer("");
     setMobileTab("people");
+    setUnread({});
+    keyCacheRef.current = {};
+    seenRef.current = {};
+    baseSetRef.current = false;
     await clearSession();
     setTab("auth");
   }
@@ -553,13 +707,25 @@ export default function Home() {
           <div className="flex flex-col flex-1 min-h-0">
             <div className="flex items-center justify-between">
               <p>Merhaba <b>{me}</b> 👋</p>
-              <button onClick={logout} className="text-xs text-zinc-400 underline">çıkış</button>
+              <div className="flex items-center gap-2">
+                {notifPerm !== "granted" ? (
+                  <button onClick={enableNotif} title="Bildirimleri aç" className="text-xs bg-zinc-800 hover:bg-zinc-700 rounded-lg px-2 py-1">🔔 Bildirimleri aç</button>
+                ) : (
+                  <span title="Bildirimler açık" className="text-xs text-emerald-400">🔔 Açık</span>
+                )}
+                <button onClick={() => setMuted((v) => !v)} title={muted ? "Sesi aç" : "Sessize al"} className="text-xs bg-zinc-800 hover:bg-zinc-700 rounded-lg px-2 py-1">
+                  {muted ? "🔇" : "🔊"}
+                </button>
+                <button onClick={logout} className="text-xs text-zinc-400 underline">çıkış</button>
+              </div>
             </div>
 
             {/* mobil sekmeler */}
             <div className="grid grid-cols-2 gap-2 mt-3 md:hidden">
               <button onClick={() => setMobileTab("people")}
-                className={`rounded-lg py-2 font-semibold ${mobileTab === "people" ? "bg-emerald-700" : "bg-zinc-800"}`}>👥 Kişiler</button>
+                className={`rounded-lg py-2 font-semibold ${mobileTab === "people" ? "bg-emerald-700" : "bg-zinc-800"}`}>
+                👥 Kişiler{unreadTotal > 0 ? ` (${unreadTotal})` : ""}
+              </button>
               <button onClick={() => setMobileTab("chat")}
                 className={`rounded-lg py-2 font-semibold ${mobileTab === "chat" ? "bg-emerald-700" : "bg-zinc-800"}`}>💬 Sohbet</button>
             </div>
@@ -578,6 +744,9 @@ export default function Home() {
                   {contacts.map((c) => (
                     <div key={c.name} className={`flex items-center gap-1 rounded-lg pr-1 ${peer === c.name && roomKey ? "bg-emerald-700" : "bg-zinc-800"}`}>
                       <button onClick={() => connectPeer(c.name)} className="flex-1 text-left px-3 py-2 font-medium truncate">💬 {c.name}</button>
+                      {(unread[c.name] ?? 0) > 0 && (
+                        <span className="bg-red-500 text-white text-xs font-bold rounded-full min-w-5 h-5 flex items-center justify-center px-1">{unread[c.name]}</span>
+                      )}
                       <button
                         title={`${c.name} kişisini sil`}
                         onClick={() => me && setContacts(removeContact(me, c.name))}
