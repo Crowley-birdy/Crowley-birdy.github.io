@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   generateIdentity,
   lockPrivateKey,
@@ -151,8 +151,6 @@ export default function Home() {
   useEffect(() => {
     mutedRef.current = muted;
   }, [muted]);
-
-  const serverMsgs = useMemo(() => loadServer(), [msgs, me]); // eslint-disable-line
 
   useEffect(() => {
     (async () => {
@@ -886,12 +884,6 @@ export default function Home() {
                         </div>
                       )}
                     </div>
-                    <details className="text-xs text-zinc-500">
-                      <summary className="cursor-pointer">Sunucunun gördüğü (şifreli)</summary>
-                      <pre className="text-[11px] bg-black rounded-lg p-2 mt-1 overflow-auto max-h-40 text-zinc-400">
-                        {JSON.stringify(serverMsgs.filter((m) => (m.from === me && m.to === peer) || (m.from === peer && m.to === me)), (k, v) => typeof v === "string" && v.length > 120 ? v.slice(0, 120) + `…(${v.length} karakter)` : v, 1)}
-                      </pre>
-                    </details>
                   </>
                 )}
               </section>
